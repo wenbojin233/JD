@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>同品关系可视化 · 十万级加速</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- vis-network -->
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <!-- SheetJS -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root{
+      --bg:#0b0f17; --panel:#111827; --muted:#94a3b8; --text:#e5e7eb; --accent:#22c55e; --border:#1f2937;
+      --btn:#0f1524; --btn-hover:#141c2e;
+      /* 经典热力：淡蓝 -> 橙 -> 深红（保证黑底可读） */
+      --heat-blue:#a8d5ff; --heat-mid:#ffd08a; --heat-red:#d64545;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    .wrap{max-width:1280px;margin:24px auto;padding:0 16px}
+    .head{display:flex;justify-content:space-between;align-items:end;gap:12px;margin-bottom:12px}
+    .title{display:flex;flex-direction:column;gap:6px}
+    .title h2{margin:0;font-size:20px}
+    .hint{font-size:12px;color:var(--muted)}
+    .controls{display:grid;grid-template-columns:1.2fr .8fr;gap:12px}
+    .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px}
+
+    /* 工具栏：更规整 */
+    .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .toolbar .group{display:flex;gap:8px;align-items:center}
+    .toolbar .divider{width:1px;height:28px;background:var(--border)}
+    input[type="text"], input[type="file"]{
+      background:var(--btn);border:1px solid var(--border);color:var(--text);
+      padding:8px 10px;border-radius:10px;outline:none;min-width:120px
+    }
+    input[type="range"]{ width:160px; }
+    label{color:var(--muted);font-size:13px}
+
+    /* 按钮：统一风格 */
+    button{
+      background:var(--btn);color:var(--text);border:1px solid var(--border);
+      border-radius:10px;padding:9px 12px;cursor:pointer;font-weight:600
+    }
+    button:hover{background:var(--btn-hover)}
+    button.primary{background:var(--accent);color:#07240f;border-color:#0f5132}
+    button.primary:hover{filter:brightness(0.98)}
+    .pill{padding:6px 10px;border-radius:999px;background:#0f1524;border:1px solid var(--border);color:var(--muted)}
+
+    #network{height:68vh;min-height:520px;border:1px dashed var(--border);border-radius:14px;background:linear-gradient(180deg,#0e1422,#0b0f17)}
+    .footer{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
+    .stats{display:flex;gap:10px;flex-wrap:wrap}
+    .badge{background:#0f1524;border:1px solid var(--border);border-radius:999px;padding:6px 10px;color:var(--muted)}
+    .progress{height:8px;background:#0f1524;border:1px solid var(--border);border-radius:999px;overflow:hidden;min-width:220px}
+    .bar{height:100%;background:var(--accent);width:0%}
+
+    /* 图例（淡蓝→红，P95截断） */
+    .legends{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+    .legend{display:flex;align-items:center;gap:8px}
+    .legend .title{font-size:12px;color:var(--muted);min-width:78px;text-align:right}
+    .legend .grad{width:160px;height:10px;border-radius:6px;border:1px solid var(--border);
+      background: linear-gradient(90deg,var(--heat-blue) 0%, var(--heat-mid) 55%, var(--heat-red) 100%);}
+    .legend .ticks{display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
+    .legend small{color:var(--muted);margin-left:6px}
+
+    /* 悬浮信息卡（可拖拽） */
+    #tooltip{
+      position:absolute; display:none; z-index:9999; max-width:460px; min-width:300px;
+      background:#0f1524; border:1px solid var(--border); border-radius:12px; padding:0;
+      box-shadow:0 6px 22px rgba(0,0,0,.35); color:var(--text); user-select:none;
+    }
+    #tooltip .hdr{
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+      background:#12192a; border-bottom:1px solid var(--border);
+      padding:8px 10px; cursor:move; border-top-left-radius:12px; border-top-right-radius:12px;
+    }
+    #tooltip h4{ margin:0; font-size:14px }
+    #tooltip .body{ padding:10px 12px }
+    #tooltip .meta{ font-size:12px; color:var(--muted); margin-bottom:6px }
+    #tooltip .list{ max-height:260px; overflow:auto; font-size:12px; line-height:1.5 }
+    #tooltip .list code{ background:#0c1220; padding:2px 4px; border-radius:6px; margin-right:6px }
+    #tooltip .close{ background:#111827; border:1px solid var(--border); color:var(--text);
+      border-radius:8px; padding:4px 8px; cursor:pointer; font-size:12px }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <div class="title">
+        <h2>同品关系可视化（十万级加速版）</h2>
+        <span class="hint">Web Worker 预计算 · 分层聚合 · 渐进渲染（优先读取 <b>same_result</b>）</span>
+      </div>
+      <span class="pill" id="status">等待文件…</span>
+    </div>
+
+    <div class="controls">
+      <!-- 左侧：主操作 -->
+      <div class="card">
+        <div class="toolbar">
+          <div class="group">
+            <input type="file" id="file" accept=".xlsx,.xls,.csv" />
+            <label for="sheet">Sheet：</label>
+            <input id="sheet" type="text" value="same_result" />
+            <button id="build" class="primary">⚙️ 预处理→构图</button>
+          </div>
+          <div class="divider"></div>
+          <div class="group">
+            <button id="collapseAll">🧩 一键聚合</button>
+            <button id="explode">🌀 一键拆散</button>
+            <button id="pause" disabled>⏸ 暂停</button>
+          </div>
+          <div class="divider"></div>
+          <div class="group">
+            <button id="reset">🗺️ 重置视图</button>
+            <button id="export">🖼️ 导出 PNG</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：检索 / 视图设定 -->
+      <div class="card">
+        <div class="toolbar">
+          <div class="group">
+            <label for="search">查找编码：</label>
+            <input id="search" type="text" placeholder="如 AAW000001" />
+            <button id="go">定位</button>
+          </div>
+          <div class="divider"></div>
+          <div class="group">
+            <label style="display:flex;gap:6px;align-items:center">
+              <input type="checkbox" id="toggleSingles" />
+              显示孤立（默认隐藏）
+            </label>
+            <label for="speed">拆散速度：</label>
+            <input id="speed" type="range" min="1" max="5" step="1" value="3" />
+            <span id="speedLabel" class="hint">中速</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div id="network"></div>
+      <div class="footer">
+        <div class="stats">
+          <div class="badge" id="nodesBadge">商品数：0</div>
+          <div class="badge" id="edgesBadge">同品关系条数：0</div>
+          <div class="badge" id="compBadge">同品组数：0</div>
+          <div class="badge" id="maxCompBadge">最大同品组规模：0</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+          <div class="legends">
+            <div class="legend" title="同品组规模（越红越大，P95 截断）">
+              <span class="title">组规模</span>
+              <div class="grad"></div>
+              <div style="width:160px">
+                <div class="ticks"><span>0</span><span id="gcap">P95上限</span></div>
+              </div>
+              <small id="gmaxNote">最大值：0</small>
+            </div>
+            <div class="legend" title="商品同品关系数（越红越多，P95 截断；同值同色，全局归一化）">
+              <span class="title">商品关系数</span>
+              <div class="grad"></div>
+              <div style="width:160px">
+                <div class="ticks"><span>0</span><span id="dcap">P95上限</span></div>
+              </div>
+              <small id="dmaxNote">最大值：0</small>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="progress"><div class="bar" id="progBar"></div></div>
+            <span class="hint" id="eta">预计完成：—</span>
+            <span class="hint" id="hint">上传数据后开始预处理（后台线程计算，不阻塞界面）</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 悬浮信息卡 -->
+  <div id="tooltip">
+    <div class="hdr" id="tipDrag">
+      <h4 id="tipTitle">—</h4>
+      <button class="close" onclick="hideTip()">关闭</button>
+    </div>
+    <div class="body">
+      <div class="meta" id="tipMeta">—</div>
+      <div class="list" id="tipList"></div>
+    </div>
+  </div>
+
+  <script>
+    /* ================== Worker（数据） ================== */
+    const workerSrc = `(() => {
+      importScripts('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+
+      class DSU { constructor(){ this.p=new Map(); this.r=new Map(); }
+        make(x){ if(!this.p.has(x)){ this.p.set(x,x); this.r.set(x,0);} }
+        find(x){ let p=this.p.get(x); if(p!==x){ p=this.find(p); this.p.set(x,p);} return p; }
+        union(a,b){ this.make(a); this.make(b); a=this.find(a); b=this.find(b); if(a===b) return;
+          const ra=this.r.get(a), rb=this.r.get(b);
+          if(ra<rb){ this.p.set(a,b);} else if(ra>rb){ this.p.set(b,a);} else { this.p.set(b,a); this.r.set(a,ra+1);} }
+      }
+
+      const state = { rows:null, codeIdx:-1, nameIdx:-1, relIdx:-1, comps:null, compOf:null, edgesGlobal:null, nameOf:null, adj:null, parsed:false };
+
+      self.onmessage = async (e) => {
+        const { type } = e.data || {};
+        if(type === 'parse'){
+          try{
+            const { buffer, sheetNamePreferred } = e.data;
+            const wb = XLSX.read(new Uint8Array(buffer), { type:'array' });
+            let sheetName = wb.SheetNames.includes(sheetNamePreferred) ? sheetNamePreferred : wb.SheetNames[0];
+            const sheet = wb.Sheets[sheetName];
+            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+            const { codeIdx, nameIdx, relIdx } = inferHeaderIndexes(rows);
+            if(codeIdx===-1 || relIdx===-1){ postMessage({ type:'error', message:'未找到必要列：商品编码/同品商品ID'}); return; }
+            state.rows = rows; state.codeIdx=codeIdx; state.nameIdx=nameIdx; state.relIdx=relIdx;
+
+            const dsu = new DSU();
+            const edgesSet = new Set();
+            const nameOf = new Map();
+            const adj = new Map();
+
+            const total = rows.length-1; let processed=0;
+            for(let r=1;r<rows.length;r++){
+              const row = rows[r]; if(!row) continue;
+              const code = String(row[state.codeIdx]||'').trim(); if(!code) continue;
+              const name = String(row[state.nameIdx]||'').trim();
+              if(name && !nameOf.has(code)) nameOf.set(code, name);
+
+              const rel = String(row[state.relIdx]||'').trim(); if(!rel) continue;
+              const peers = rel.split(',').map(s=>s.trim()).filter(Boolean);
+              for(const peer of peers){
+                if(!peer) continue;
+                dsu.union(code, peer);
+                if(code!==peer){
+                  const key = [code,peer].sort().join('::');
+                  if(!edgesSet.has(key)){
+                    edgesSet.add(key);
+                    if(!adj.has(code)) adj.set(code, new Set());
+                    if(!adj.has(peer)) adj.set(peer, new Set());
+                    adj.get(code).add(peer);
+                    adj.get(peer).add(code);
+                  }
+                }
+              }
+              processed++; if(processed % 2000 === 0){ postMessage({type:'progress', p: Math.round(processed/total*50)}); }
+            }
+
+            const compOf = new Map(); const comps = new Map(); const ids = new Set();
+            for(let r=1;r<rows.length;r++){
+              const row = rows[r]; if(!row) continue;
+              const code = String(row[state.codeIdx]||'').trim(); if(code) ids.add(code);
+              const rel = String(row[state.relIdx]||'').trim(); if(rel){ rel.split(',').forEach(x=>{ x=x.trim(); if(x) ids.add(x); }); }
+              const name = String(row[state.nameIdx]||'').trim(); if(code && name && !nameOf.has(code)) nameOf.set(code, name);
+            }
+            let i=0; const n=ids.size;
+            for(const id of ids){ dsu.make(id); compOf.set(id, dsu.find(id)); i++; if(i%5000===0){ postMessage({type:'progress', p:50+Math.round(i/n*15)});} }
+            for(const id of ids){ const c=compOf.get(id); if(!comps.has(c)) comps.set(c,new Set()); comps.get(c).add(id); }
+
+            // 度数统计（全局）+ P95
+            const degs = [];
+            for (const [id,set] of adj.entries()){ degs.push(set.size); }
+            const degMax = degs.length ? Math.max(...degs) : 0;
+            const degP95 = quantile(degs, 0.95);
+
+            // 每个分量的边计数（精确 ETA 用）
+            const edgesByComp = new Map();
+            for(const key of edgesSet){
+              const [a,b] = key.split('::');
+              const c = dsu.find(a); // b 属于同一分量
+              edgesByComp.set(c, (edgesByComp.get(c)||0) + 1);
+            }
+
+            const compList = Array.from(comps.entries()).map(([cid,set])=>({ cid, size:set.size })).sort((a,b)=>b.size-a.size);
+            state.comps = comps; state.compOf = compOf; state.edgesGlobal = edgesSet; state.nameOf=nameOf; state.adj=adj; state.parsed=true;
+            postMessage({ type:'summary',
+              comps: compList,
+              totalNodes: ids.size, totalEdges: edgesSet.size,
+              degreeMax: degMax, degreeP95: degP95,
+              edgesByComp: Array.from(edgesByComp.entries()).map(([cid,count])=>({cid, count}))
+            });
+          }catch(err){ postMessage({ type:'error', message: '解析/预处理失败：'+err.message }); }
+        } else if(type==='getComponent'){
+          if(!state.parsed){ postMessage({type:'error', message:'尚未解析完成'}); return; }
+          const { cid, needEdges=true, needPrefix=true } = e.data;
+          const set = state.comps.get(cid); if(!set){ postMessage({type:'error', message:'未知分量 '+cid}); return; }
+          const nodes = Array.from(set);
+          let edges = null; let prefixMap = null; let prefixEdges = null;
+
+          if(needEdges){
+            edges = [];
+            const setHas = (x)=> set.has(x);
+            let cnt=0; const total=state.edgesGlobal.size;
+            for(const key of state.edgesGlobal){
+              const [a,b] = key.split('::');
+              if(setHas(a) && setHas(b)){ edges.push([a,b]); }
+              cnt++; if(cnt%50000===0){ postMessage({type:'progress', p: 65+Math.round(cnt/total*25)}); }
+            }
+          }
+          if(needPrefix){
+            const pmap = new Map();
+            for(const id of nodes){ const p = id.slice(0,3); if(!pmap.has(p)) pmap.set(p,[]); pmap.get(p).push(id); }
+            prefixMap = pmap;
+            if(edges){
+              const cntMap = new Map(); const insideCnt = new Map();
+              for(const [a,b] of edges){
+                const pa=a.slice(0,3), pb=b.slice(0,3);
+                if(pa===pb){ insideCnt.set(pa, (insideCnt.get(pa)||0)+1 ); }
+                else { const k = pa<pb ? pa+'::'+pb : pb+'::'+pa; cntMap.set(k, (cntMap.get(k)||0)+1 ); }
+              }
+              prefixEdges = { cross: Array.from(cntMap.entries()).map(([k,c])=>({ pair:k, count:c })), inside: Array.from(insideCnt.entries()).map(([p,c])=>({ prefix:p, count:c })) }
+            }
+          }
+          const names = {}; const degrees = {};
+          for(const id of nodes){
+            names[id] = state.nameOf.get(id)||'';
+            degrees[id] = (state.adj.get(id)||new Set()).size;
+          }
+          const prefixObj = prefixMap ? Array.from(prefixMap.entries()).map(([prefix, arr])=>({ prefix, nodes:arr })) : null;
+          postMessage({ type:'componentData', cid, nodes, names, degrees, edges, prefixMap: prefixObj, prefixEdges });
+        } else if(type==='neighbors'){
+          const id = e.data.id;
+          const name = state.nameOf.get(id)||'';
+          const set = state.adj.get(id) || new Set();
+          const neighbors = Array.from(set).map(n=>({ id:n, name: state.nameOf.get(n)||'' }));
+          postMessage({ type:'neighbors', id, name, degree:set.size, neighbors });
+        } else if(type==='getDegrees'){
+          const ids = e.data.ids || [];
+          const out = {};
+          for(const id of ids){ out[id] = (state.adj.get(id)||new Set()).size; }
+          postMessage({ type:'degrees', ids, degrees: out });
+        }
+      };
+
+      function inferHeaderIndexes(rows){
+        let codeIdx=-1, nameIdx=-1, relIdx=-1;
+        const headerCandidates = rows.slice(0,5);
+        for(const row of headerCandidates){
+          row.forEach((cell,i)=>{ const v=String(cell).trim(); if(!v) return;
+            if(["商品编码","编码","ID","商品ID"].includes(v)) codeIdx=i;
+            if(["商品名称","名称","品名"].includes(v)) nameIdx = nameIdx===-1? i: nameIdx;
+            if(["同品商品ID","同品ID","同品","关系"].includes(v)) relIdx=i;
+          });
+          if(codeIdx!==-1 && relIdx!==-1) break;
+        }
+        if(codeIdx===-1 && rows.length) codeIdx=0;
+        if(nameIdx===-1 && rows.length && rows[0].length>=2) nameIdx=1;
+        if(relIdx===-1 && rows.length && rows[0].length>=3) relIdx=2;
+        return { codeIdx, nameIdx, relIdx };
+      }
+      function quantile(arr, q){
+        if(!arr.length) return 0;
+        const a = arr.slice().sort((x,y)=>x-y);
+        const pos = (a.length-1)*q, base = Math.floor(pos), rest = pos - base;
+        if(a[base+1]!==undefined) return a[base] + rest*(a[base+1]-a[base]);
+        return a[base];
+      }
+    })();`;
+    const worker = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: 'application/javascript' })));
+
+    /* ================== 前端状态 ================== */
+    let network, nodesDS = new vis.DataSet([]), edgesDS = new vis.DataSet([]);
+    let fullSummary = null; // { comps, totalNodes, totalEdges, degreeMax, degreeP95, edgesByComp[] }
+    const expandedState = new Map();
+    let hiddenSinglesCount = 0;
+
+    // 全局颜色归一化上限（P95 截断）
+    let DEGREE_CAP = 0, DEGREE_MAX = 0, GROUP_CAP = 0, GROUP_MAX = 0;
+    // 每组精确边数 Map
+    let EDGES_PER_COMP = new Map();
+
+    // 速度（批量与延时）
+    const speedInput = document.getElementById('speed');
+    const speedLabel = document.getElementById('speedLabel');
+    const speedText = ['很慢','较慢','中速','较快','很快'];
+    speedInput.addEventListener('input', ()=>{ speedLabel.textContent = speedText[Number(speedInput.value)-1]; if(exploding) updateETA(); });
+    speedLabel.textContent = speedText[Number(speedInput.value)-1];
+    const speedProfile = ()=>{ const s = Number(speedInput.value); return { nodeChunk: 1000 + (s-1)*1000, edgeChunk: 2000 + (s-1)*2000, groupDelay: 700 - (s-1)*150 }; };
+
+    // 一键拆散调度
+    let explodeQueue = []; let exploding=false; let paused=false; let autoPaused=false;
+    const SAFE_MAX_NODES = 30000, SAFE_MAX_EDGES = 60000;
+
+    // 颜色：淡蓝→橙→红
+    function lerp(a,b,t){ return a+(b-a)*t; }
+    function hex(r,g,b){ return '#'+[r,g,b].map(x=>Math.round(x).toString(16).padStart(2,'0')).join(''); }
+    function heatClassic(t){
+      t = Math.max(0, Math.min(1, t||0));
+      if(t < 0.6){
+        const u = t/0.6, c0=[0xa8,0xd5,0xff], c1=[0xff,0xd0,0x8a];
+        return hex(lerp(c0[0],c1[0],u), lerp(c0[1],c1[1],u), lerp(c0[2],c1[2],u));
+      } else {
+        const u = (t-0.6)/0.4, c0=[0xff,0xd0,0x8a], c1=[0xd6,0x45,0x45];
+        return hex(lerp(c0[0],c1[0],u), lerp(c0[1],c1[1],u), lerp(c0[2],c1[2],u));
+      }
+    }
+    function normP95(v, cap){ if(cap<=0) return 0; return Math.max(0, Math.min(1, v / cap)); }
+
+    /* ================== 后台渲染：跨标签页的调度 ==================
+       - 前台：requestIdleCallback
+       - 后台（document.hidden）：MessageChannel 微任务，避免 setTimeout 节流
+    ================================================================= */
+    const immediate = (()=>{ const mc=new MessageChannel(); const q=[]; mc.port1.onmessage=()=>{ const fn=q.shift(); fn&&fn(); }; return (fn)=>{ q.push(fn); mc.port2.postMessage(0); };})();
+    function scheduleIdle(fn){
+      if(document.hidden){ immediate(fn); }
+      else if('requestIdleCallback' in window){ requestIdleCallback(fn,{timeout:60}); }
+      else { setTimeout(fn,0); }
+    }
+    document.addEventListener('visibilitychange', ()=>{ /* 不需要做别的，scheduleIdle 会自动切换 */ });
+
+    /* ================== Network 初始化 ================== */
+    function initNetwork(){
+      const container = document.getElementById('network');
+      network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
+        layout: { improvedLayout: false }, physics: { enabled:false },
+        nodes: { shape:'dot', size:9, font:{ color:'#e5e7eb', size:12 }, borderWidth:1 },
+        edges: { smooth:false, color:{ color:'#2b354a', highlight:'#6b7280' }, width:1 },
+        interaction: { hover:false, tooltipDelay:0, zoomView:true, dragNodes:true }
+      });
+
+      network.on('doubleClick', (params)=>{
+        if(params.nodes && params.nodes.length){
+          const nid = params.nodes[0];
+          if(nid.startsWith('C:')){ expandComponent(nid.slice(2)); }
+          else if(nid.startsWith('P:')){ const [_, cid, prefix] = nid.split(':'); expandPrefix(cid, prefix); }
+          else { const cid = componentIdOfNode(nid); if(cid) collapseComponent(cid); }
+        }
+      });
+
+      network.on('click', (params)=>{
+        if(params.nodes && params.nodes.length){
+          const nid = params.nodes[0];
+          if(nid.startsWith('N:')){
+            const code = nid.slice(2);
+            const pos = params.pointer.DOM;
+            const rect = container.getBoundingClientRect();
+            pendingTipPos = { x: rect.left + pos.x, y: rect.top + pos.y };
+            worker.postMessage({ type:'neighbors', id: code });
+          } else {
+            hideTip();
+          }
+        } else hideTip();
+      });
+
+      worker.addEventListener('message', (e)=>{
+        if(e.data && e.data.type==='neighbors'){ showTip(e.data); }
+        else if(e.data && e.data.type==='degrees'){ if(_pendingDegreesCB){ const cb=_pendingDegreesCB; _pendingDegreesCB=null; cb(e.data.degrees);} }
+      });
+    }
+
+    /* ================== 基础 UI ================== */
+    function datasetSize(ds){ return (typeof ds.length === 'number') ? ds.length : ds.getIds().length; }
+    function updateStats(){
+      document.getElementById('nodesBadge').textContent = '商品数：'+datasetSize(nodesDS);
+      document.getElementById('edgesBadge').textContent = '同品关系条数：'+datasetSize(edgesDS);
+      const totalComps = fullSummary ? fullSummary.comps.length : 0;
+      const shownComps = totalComps - (document.getElementById('toggleSingles').checked ? 0 : hiddenSinglesCount);
+      document.getElementById('compBadge').textContent = `同品组数：${shownComps}` + (hiddenSinglesCount && !document.getElementById('toggleSingles').checked ? `（已隐藏孤立 ${hiddenSinglesCount}）` : '');
+      const maxComp = GROUP_MAX || 0;
+      document.getElementById('maxCompBadge').textContent = '最大同品组规模：'+ maxComp;
+    }
+    function setProgress(p, text){ document.getElementById('progBar').style.width = (p||0)+'%'; if(text) document.getElementById('hint').textContent = text; }
+    function updateLegends(){
+      document.getElementById('gcap').textContent = String(GROUP_CAP||0);
+      document.getElementById('gmaxNote').textContent = '最大值：'+(GROUP_MAX||0);
+      document.getElementById('dcap').textContent = String(DEGREE_CAP||0);
+      document.getElementById('dmaxNote').textContent = '最大值：'+(DEGREE_MAX||0);
+    }
+
+    /* ================== 事件 ================== */
+    document.getElementById('build').addEventListener('click', async ()=>{
+      const f = document.getElementById('file').files[0];
+      if(!f){ alert('请选择 Excel/CSV 文件'); return; }
+      resetAll();
+      document.getElementById('status').textContent = '读取中…';
+      setProgress(0,'正在解析文件…');
+      const buf = await f.arrayBuffer();
+      worker.postMessage({ type:'parse', buffer: buf, sheetNamePreferred: (document.getElementById('sheet').value||'').trim() });
+    });
+
+    document.getElementById('collapseAll').addEventListener('click', ()=>{
+      exploding=false; paused=false; autoPaused=false; document.getElementById('pause').disabled = true; hideTip();
+      renderCollapsed();
+      document.getElementById('eta').textContent = '预计完成：—';
+    });
+    document.getElementById('explode').addEventListener('click', ()=> startExplodeAll());
+    document.getElementById('pause').addEventListener('click', ()=>{
+      if(!exploding) return;
+      paused = !paused;
+      document.getElementById('pause').textContent = paused ? '▶ 继续' : '⏸ 暂停';
+      if(!paused) scheduleNextExplode();
+    });
+
+    document.getElementById('reset').addEventListener('click', ()=> network && network.fit({ animation:true }));
+    document.getElementById('export').addEventListener('click', exportPNG);
+    document.getElementById('go').addEventListener('click', locateNode);
+    document.getElementById('toggleSingles').addEventListener('change', ()=>{
+      renderCollapsed();
+      if(exploding) updateETA();
+    });
+
+    worker.onmessage = (e)=>{
+      const { type } = e.data || {};
+      if(type==='error'){ alert(e.data.message); setProgress(0,''); document.getElementById('status').textContent='错误'; return; }
+      if(type==='progress'){ setProgress(e.data.p); return; }
+      if(type==='summary'){
+        fullSummary = { comps: e.data.comps, totalNodes: e.data.totalNodes, totalEdges: e.data.totalEdges, degreeMax: e.data.degreeMax||0, degreeP95: e.data.degreeP95||0, edgesByComp: e.data.edgesByComp||[] };
+        // 全局上限（P95）与最大值
+        DEGREE_MAX = fullSummary.degreeMax||0;
+        DEGREE_CAP = Math.max(1, Math.round(fullSummary.degreeP95||DEGREE_MAX));
+        GROUP_MAX = fullSummary.comps.length ? Math.max(...fullSummary.comps.map(c=>c.size)) : 0;
+        GROUP_CAP = percentile(fullSummary.comps.map(c=>c.size), 0.95);
+        // 边数映射
+        EDGES_PER_COMP = new Map((fullSummary.edgesByComp||[]).map(o=>[o.cid, o.count||0]));
+        renderCollapsed();
+        updateLegends();
+        document.getElementById('status').textContent = `已加载：商品${e.data.totalNodes}、关系${e.data.totalEdges}；同品组${e.data.comps.length}`;
+        setProgress(100,'预处理完成，可双击同品组展开 / 一键拆散');
+      }
+      if(type==='componentData'){ cacheComponentData(e.data); }
+    };
+
+    /* ================== 工具：分位数 ================== */
+    function percentile(values, q){
+      if(!values.length) return 0;
+      const a = values.slice().sort((x,y)=>x-y);
+      const pos = (a.length-1)*q, base = Math.floor(pos), rest = pos - base;
+      if(a[base+1]!==undefined) return Math.round(a[base] + rest*(a[base+1]-a[base]));
+      return Math.round(a[base]);
+    }
+
+    /* ================== 布局 ================== */
+    function gridPositions(n, spacing=26){
+      const cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols);
+      const out = []; const x0 = - (cols-1)*spacing/2, y0 = - (rows-1)*spacing/2;
+      let k=0; for(let r=0;r<rows;r++){ for(let c=0;c<cols;c++){ if(k++>=n) break; out.push({ x: x0 + c*spacing, y: y0 + r*spacing }); } }
+      return out;
+    }
+    function ringPositions(n, R=120, jitter=8){
+      const out=[]; const step = (2*Math.PI)/Math.max(1,n);
+      for(let i=0;i<n;i++){ const ang = i*step;
+        out.push({ x: Math.cos(ang)*R + (Math.random()*2-1)*jitter, y: Math.sin(ang)*R + (Math.random()*2-1)*jitter });
+      }
+      return out;
+    }
+
+    /* ================== 聚合视图（按组规模 P95 着色） ================== */
+    function renderCollapsed(){
+      nodesDS.clear(); edgesDS.clear(); expandedState.clear();
+      if(!fullSummary) return;
+
+      const showSingles = document.getElementById('toggleSingles').checked;
+      const compsAll = fullSummary.comps;
+      hiddenSinglesCount = compsAll.filter(c=>c.size===1).length;
+      const comps = showSingles ? compsAll : compsAll.filter(c=>c.size>1);
+
+      const nodes = comps.map((c)=>({
+        id: 'C:'+c.cid,
+        label: undefined,
+        group: 'COMP',
+        value: c.size,
+        color: { background: heatClassic(normP95(c.size, GROUP_CAP)), border:'#0b1020', highlight:{ background: heatClassic(normP95(c.size, GROUP_CAP)) } },
+        shape: 'dot',
+        size: Math.min(8 + Math.log2(1+c.size)*3.5, 36)
+      }));
+      const pos = gridPositions(nodes.length, 28);
+      for(let i=0;i<nodes.length;i++){ nodes[i].x = pos[i].x; nodes[i].y = pos[i].y; }
+      nodesDS.add(nodes);
+      network.setOptions({ physics: { enabled:false } });
+      updateStats(); updateLegends();
+      network.fit({ animation:true });
+      document.getElementById('hint').textContent = '双击同品组可展开；一键拆散按热力（越红越大）逐步展开';
+    }
+
+    /* ================== 展开/折叠 ================== */
+    const FULL_NODE_LIMIT = 1200;
+
+    function expandComponent(cid, forceMode=null){
+      const compInfo = fullSummary.comps.find(x=>x.cid===cid); if(!compInfo) return;
+      const mode = forceMode || (compInfo.size <= FULL_NODE_LIMIT ? 'full':'prefix');
+
+      if(!expandedState.has(cid)){
+        expandedState.set(cid, { mode:null, nodes:new Set(), edges:new Set(), prefixClusters:new Set(), nodeToCid:new Map(), anchor:null, prefixHeat:null, names:{} });
+      }
+      const nid = 'C:'+cid;
+      let anchor = {x:0,y:0};
+      if(nodesDS.get(nid)){ const p = network.getPositions([nid])[nid]; if(p && Number.isFinite(p.x)) anchor = p; nodesDS.remove(nid); }
+      const st = expandedState.get(cid); st.anchor = anchor;
+
+      if(mode==='full'){
+        requestComponent(cid, { needEdges:true, needPrefix:false }, ()=> renderFullComponent(cid));
+      } else {
+        requestComponent(cid, { needEdges:true, needPrefix:true }, ()=> renderPrefixClusters(cid));
+      }
+    }
+    function collapseComponent(cid){
+      const st = expandedState.get(cid);
+      if(st){ nodesDS.remove(Array.from(st.nodes)); edgesDS.remove(Array.from(st.edges)); expandedState.delete(cid); }
+      const comp = fullSummary.comps.find(c=>c.cid===cid);
+      if(comp && (document.getElementById('toggleSingles').checked || comp.size>1)){
+        if(!nodesDS.get('C:'+cid)){
+          const n = { id:'C:'+cid, label: undefined, value:comp.size, group:'COMP',
+            color:{ background: heatClassic(normP95(comp.size, GROUP_CAP)), border:'#0b1020', highlight:{ background: heatClassic(normP95(comp.size, GROUP_CAP)) } },
+            shape:'dot', size: Math.min(8 + Math.log2(1+comp.size)*3.5, 36),
+            x:(st?.anchor?.x||0)+(Math.random()*2-1)*5, y:(st?.anchor?.y||0)+(Math.random()*2-1)*5
+          };
+          nodesDS.add(n);
+        }
+      }
+      updateStats();
+    }
+    function requestComponent(cid, opts, cb){
+      document.getElementById('hint').textContent = '正在加载同品组 '+cid+' …';
+      worker.postMessage({ type:'getComponent', cid, ...opts });
+      const onData = (e)=>{
+        if(e.data && e.data.type==='componentData' && e.data.cid===cid){
+          worker.removeEventListener('message', onData);
+          cacheComponentData(e.data); cb();
+        }
+      };
+      worker.addEventListener('message', onData);
+    }
+    function cacheComponentData(data){
+      const st = expandedState.get(data.cid) || { nodes:new Set(), edges:new Set(), prefixClusters:new Set(), nodeToCid:new Map(), anchor:null, prefixHeat:null, names:{} };
+      st._payload = data; st.names = data.names || st.names; expandedState.set(data.cid, st);
+    }
+
+    /* ================== ETA：批次耗时的动态测量（EWMA） ================== */
+    const etaMeter = { nodeBatchMs: 8, edgeBatchMs: 12, alpha: 0.22 };
+    function ewma(cur, sample, a){ return cur*(1-a) + sample*a; }
+    // 当前组进度（用于从ETA扣除）
+    let currentGroup = null; // { cid, totalNodes, totalEdges, addedNodes, addedEdges, mode }
+
+    /* 分批添加，后台友好；kind: 'node' | 'edge'；progressCb(delta) 可选 */
+    function addInChunks(items, chunkSize, onEach, onDone, kind, progressCb){
+      let idx=0;
+      (function step(){
+        const t0 = performance.now();
+        const chunk = items.slice(idx, idx+chunkSize); idx += chunkSize;
+        if(chunk.length){
+          onEach(chunk);
+          const dt = performance.now() - t0;
+          if(kind==='node') etaMeter.nodeBatchMs = ewma(etaMeter.nodeBatchMs, dt, etaMeter.alpha);
+          if(kind==='edge') etaMeter.edgeBatchMs = ewma(etaMeter.edgeBatchMs, dt, etaMeter.alpha);
+          if(typeof progressCb==='function') progressCb(chunk.length);
+        }
+        if(idx < items.length) scheduleIdle(step); else onDone && onDone();
+      })();
+    }
+
+    function renderFullComponent(cid){
+      const st = expandedState.get(cid); if(!st || !st._payload) return;
+      const { nodes, edges, degrees } = st._payload; delete st._payload; st.mode='full';
+
+      // 设置当前组用于 ETA 扣除
+      currentGroup = { cid, mode:'full', totalNodes:nodes.length, totalEdges:edges.length, addedNodes:0, addedEdges:0 };
+
+      const ring = ringPositions(nodes.length, Math.min(200 + nodes.length*0.02, 600), 10);
+      const visNodes = nodes.map((id, i)=>{
+        const d = (degrees && typeof degrees[id]==='number') ? degrees[id] : 0;
+        const t = normP95(d, DEGREE_CAP);
+        return { id:'N:'+id, label: (nodes.length<=1500) ? id : undefined,
+          color:{ background: heatClassic(t), border:'#0b1020' },
+          x: st.anchor.x + ring[i].x, y: st.anchor.y + ring[i].y
+        };
+      });
+
+      const { nodeChunk, edgeChunk } = speedProfile();
+      addInChunks(visNodes, nodeChunk, chunk=>nodesDS.add(chunk), ()=>{}, 'node',
+        (dn)=>{ currentGroup && (currentGroup.addedNodes += dn); updateETA(); });
+      visNodes.forEach(n=>{ st.nodes.add(n.id); st.nodeToCid.set(n.id, cid); });
+
+      const visEdges = edges.map(([a,b],i)=>({ id:`E:${cid}:${i}`, from:'N:'+a, to:'N:'+b }));
+      addInChunks(visEdges, edgeChunk, chunk=>edgesDS.add(chunk), ()=>{
+        // 小规模时短暂开物理优化视觉
+        if(visNodes.length <= 3000 && visEdges.length <= 8000){
+          network.setOptions({ physics: { enabled:true, barnesHut:{ gravitationalConstant:-3000, centralGravity:0.25, springLength:110, springConstant:0.04 }, stabilization:{ enabled:false } } });
+          setTimeout(()=> network.setOptions({ physics: { enabled:false } }), 600);
+        }
+        updateStats();
+        document.getElementById('hint').textContent = '展开完成（双击任一商品可折叠回同品组）';
+        currentGroup = null; updateETA();
+      }, 'edge', (de)=>{ currentGroup && (currentGroup.addedEdges += de); updateETA(); });
+      visEdges.forEach(e=> st.edges.add(e.id));
+    }
+
+    /* 前缀聚合 */
+    function renderPrefixClusters(cid){
+      const st = expandedState.get(cid); if(!st || !st._payload) return;
+      const { prefixMap, prefixEdges } = st._payload; delete st._payload; st.mode='prefix';
+
+      const arr = (prefixMap||[]);
+      const sizes = arr.map(o=>o.nodes.length);
+      const p95 = Math.max(1, percentile(sizes, 0.95));
+      const ring = ringPositions(arr.length, 180, 6);
+
+      const prefNodes = arr.map((o, i)=>({
+        id:`P:${cid}:${o.prefix}`, label: `${o.prefix}\n(n=${o.nodes.length})`,
+        shape:'dot', size: Math.min(10+Math.log2(1+o.nodes.length)*4, 38),
+        color:{ background: heatClassic(normP95(o.nodes.length, p95)), border:'#0b1020' },
+        x: st.anchor.x + ring[i].x, y: st.anchor.y + ring[i].y
+      }));
+      nodesDS.add(prefNodes); prefNodes.forEach(n=> st.prefixClusters.add(n.id));
+
+      if(prefixEdges && prefixEdges.cross){
+        const pes = prefixEdges.cross.map((e,i)=>({
+          id:`EP:${cid}:${i}`,
+          from:`P:${cid}:${e.pair.split('::')[0]}`, to:`P:${cid}:${e.pair.split('::')[1]}`,
+          width: Math.min(1 + Math.log2(1+e.count), 6)
+        }));
+        edgesDS.add(pes); pes.forEach(e=> st.edges.add(e.id));
+      }
+      updateStats();
+      document.getElementById('hint').textContent = '已按前缀聚合（双击前缀展开；双击任一商品可折叠整组）';
+      // 设置“近似”当前组（用于 ETA 扣除更合理）
+      currentGroup = { cid, mode:'prefix', totalNodes:prefNodes.length, totalEdges:(prefixEdges?.cross?.length||0), addedNodes:prefNodes.length, addedEdges:(prefixEdges?.cross?.length||0) };
+      // 这里 prefix 视图一次性加入了，所以直接视为已完成；ETA 自然只看队列余量
+      currentGroup = null; updateETA();
+    }
+
+    /* —— 前缀内展开为实体 —— */
+    let _pendingDegreesCB = null;
+    function requestDegrees(ids, cb){ _pendingDegreesCB = cb; worker.postMessage({ type:'getDegrees', ids }); }
+    function expandPrefix(cid, prefix){
+      const st = expandedState.get(cid); if(!st) return;
+      if(!st.mode || st.mode!=='prefix' || !st._prefixCache){
+        const onData = (e)=>{
+          if(e.data && e.data.type==='componentData' && e.data.cid===cid){
+            worker.removeEventListener('message', onData);
+            st._prefixCache = new Map((e.data.prefixMap||[]).map(o=>[o.prefix, o.nodes]));
+            const items = st._prefixCache.get(prefix)||[];
+            requestDegrees(items, (degMap)=> renderPrefixGroup(cid, prefix, items, degMap));
+          }
+        };
+        worker.addEventListener('message', onData);
+        worker.postMessage({ type:'getComponent', cid, needEdges:false, needPrefix:true });
+      } else {
+        const items = st._prefixCache.get(prefix)||[];
+        requestDegrees(items, (degMap)=> renderPrefixGroup(cid, prefix, items, degMap));
+      }
+    }
+    function renderPrefixGroup(cid, prefix, items, degMap){
+      const st = expandedState.get(cid); if(!st) return;
+      const pid = `P:${cid}:${prefix}`;
+      let anchor = st.anchor;
+      if(nodesDS.get(pid)){ const p = network.getPositions([pid])[pid]; if(p && Number.isFinite(p.x)) anchor = p; nodesDS.remove(pid); st.prefixClusters.delete(pid); }
+      const ring = ringPositions(items.length, 140, 8);
+      const visNodes = items.map((id, i)=>{
+        const d = (degMap && typeof degMap[id]==='number') ? degMap[id] : 0;
+        const t = normP95(d, DEGREE_CAP);
+        return { id:'N:'+id, label: undefined, color:{ background: heatClassic(t), border:'#0b1020' }, x: anchor.x + ring[i].x, y: anchor.y + ring[i].y };
+      });
+      nodesDS.add(visNodes); visNodes.forEach(n=>{ st.nodes.add(n.id); st.nodeToCid.set(n.id, cid); });
+
+      if(items.length>=2){
+        const rep = 'N:'+items[0]; const es = [];
+        for(let i=1;i<items.length;i++) es.push({ id:`E:${cid}:${prefix}:${i}`, from:rep, to:'N:'+items[i], dashes:true });
+        edgesDS.add(es); es.forEach(e=> st.edges.add(e.id));
+      }
+      updateStats();
+    }
+
+    function componentIdOfNode(nid){
+      for(const [cid, st] of expandedState.entries()){
+        if(st.nodes.has(nid)) return cid;
+        if(st.prefixClusters && st.prefixClusters.has(nid)) return cid;
+      }
+      return null;
+    }
+
+    /* ================== 一键拆散 + 准确 ETA ================== */
+    function estimateGroupMs(size, cid){
+      const { nodeChunk, edgeChunk, groupDelay } = speedProfile();
+      // 精确边数（若无则用平均估计兜底）
+      const edges = EDGES_PER_COMP.get(cid) ?? Math.round(size * ((fullSummary.totalEdges||0)/(fullSummary.totalNodes||1)));
+      const nodeSteps = Math.ceil(size / nodeChunk);
+      const edgeSteps = Math.ceil(edges / edgeChunk);
+      return nodeSteps*etaMeter.nodeBatchMs + edgeSteps*etaMeter.edgeBatchMs + groupDelay;
+    }
+    function updateETA(){
+      if(!fullSummary || !explodeQueue) { document.getElementById('eta').textContent = '预计完成：—'; return; }
+      const sizesMap = new Map(fullSummary.comps.map(c=>[c.cid, c.size]));
+      let totalMs = 0;
+
+      // 当前组剩余扣除
+      if(currentGroup){
+        const { nodeChunk, edgeChunk, groupDelay } = speedProfile();
+        const nodesLeft = Math.max(0, (currentGroup.totalNodes||0) - (currentGroup.addedNodes||0));
+        const edgesLeft = Math.max(0, (currentGroup.totalEdges||0) - (currentGroup.addedEdges||0));
+        const nodeSteps = Math.ceil(nodesLeft / nodeChunk);
+        const edgeSteps = Math.ceil(edgesLeft / edgeChunk);
+        totalMs += nodeSteps*etaMeter.nodeBatchMs + edgeSteps*etaMeter.edgeBatchMs + (nodesLeft||edgesLeft ? groupDelay : 0);
+      }
+
+      for(const cid of explodeQueue){
+        totalMs += estimateGroupMs(sizesMap.get(cid)||0, cid);
+      }
+      const sec = Math.max(0, Math.round(totalMs/1000));
+      document.getElementById('eta').textContent = '预计完成：~ ' + (sec>=60 ? `${Math.floor(sec/60)}分${sec%60}秒` : `${sec}秒`);
+    }
+
+    function startExplodeAll(){
+      if(!fullSummary) return;
+      explodeQueue = fullSummary.comps.filter(c=>c.size>1).map(c=>c.cid);
+      explodeQueue.sort((a,b)=>{
+        const sa = fullSummary.comps.find(x=>x.cid===a).size;
+        const sb = fullSummary.comps.find(x=>x.cid===b).size;
+        return sb-sa;
+      });
+      renderCollapsed();
+      exploding = true; paused = false; autoPaused = false; document.getElementById('pause').disabled = false; document.getElementById('pause').textContent = '⏸ 暂停';
+      updateETA(); scheduleNextExplode();
+    }
+
+    function scheduleNextExplode(){
+      if(!exploding || paused) return;
+      if(datasetSize(nodesDS) > SAFE_MAX_NODES || datasetSize(edgesDS) > SAFE_MAX_EDGES){
+        autoPaused = true; paused = true; document.getElementById('pause').textContent = '▶ 继续';
+        document.getElementById('hint').textContent = '为保护性能已自动暂停（达到安全阈值）。点击“继续”可继续。'; return;
+      }
+      if(explodeQueue.length === 0){
+        exploding=false; document.getElementById('pause').disabled = true;
+        document.getElementById('eta').textContent = '预计完成：已完成';
+        document.getElementById('hint').textContent = '拆散完成。双击任一商品可折叠回所属同品组。'; return;
+      }
+      const cid = explodeQueue.shift();
+      updateETA();
+      expandComponent(cid);
+      const { groupDelay } = speedProfile();
+      // 用 scheduleIdle 确保后台也能继续推进
+      scheduleIdle(()=> setTimeout(scheduleNextExplode, groupDelay));
+    }
+
+    /* ================== 公共工具 ================== */
+    function addInChunksSimple(items, chunkSize, onEach, onDone){
+      let idx=0; (function step(){ const chunk=items.slice(idx, idx+chunkSize); idx += chunkSize; if(chunk.length) onEach(chunk);
+        if(idx < items.length) scheduleIdle(step); else onDone&&onDone(); })();
+    } // 备用
+
+    function locateNode(){
+      const id = (document.getElementById('search').value||'').trim(); if(!id) return;
+      const nid = nodesDS.get('N:'+id) ? 'N:'+id : nodesDS.get('C:'+id) ? 'C:'+id : null;
+      if(!nid){ alert('未找到（可能在折叠组内）。请先展开相关组或输入完整编码。'); return; }
+      network.selectNodes([nid], true);
+      const pos = network.getPositions([nid])[nid];
+      network.moveTo({ position: pos, scale: 1.2, animation: true });
+    }
+    function exportPNG(){
+      const canvas = network.canvas.frame.canvas;
+      const url = canvas.toDataURL('image/png');
+      const a = document.createElement('a'); a.href=url; a.download='同品关系图.png'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    }
+    function resetAll(){
+      nodesDS.clear(); edgesDS.clear(); expandedState.clear(); fullSummary=null;
+      DEGREE_CAP = 0; DEGREE_MAX = 0; GROUP_CAP = 0; GROUP_MAX = 0;
+      EDGES_PER_COMP = new Map();
+      etaMeter.nodeBatchMs = 8; etaMeter.edgeBatchMs = 12;
+      currentGroup = null;
+      updateStats(); updateLegends(); setProgress(0,'');
+      document.getElementById('pause').disabled = true; exploding=false; paused=false; autoPaused=false;
+      document.getElementById('status').textContent='处理中…'; document.getElementById('eta').textContent='预计完成：—';
+      hideTip();
+    }
+
+    // —— 小工具：局部 P95（前缀聚合用） ——
+    function p95Local(arr){ return percentile(arr, 0.95); }
+
+    /* ================== 悬浮信息卡（位置合理 + 可拖拽） ================== */
+    let pendingTipPos = null, _dragging=false, _dragOffset={x:0,y:0};
+    const tip = document.getElementById('tooltip');
+    const tipHdr = document.getElementById('tipDrag');
+
+    function showTip(data){
+      const title = document.getElementById('tipTitle');
+      const meta = document.getElementById('tipMeta');
+      const list = document.getElementById('tipList');
+      title.textContent = `${data.id} ${data.name || ''}`.trim();
+      meta.textContent = `关系条数：${data.degree}（同品）`;
+      const maxShow = 200;
+      const rows = data.neighbors.slice(0, maxShow).map(n=>`<div><code>${n.id}</code>${(n.name||'')}</div>`).join('');
+      list.innerHTML = rows + (data.neighbors.length>maxShow ? `<div class="hint">… 共 ${data.neighbors.length} 个同品，已截断显示</div>` : '');
+
+      // 定位：基于点击位置，自动避让窗口边界
+      const vw = window.innerWidth, vh = window.innerHeight;
+      tip.style.display = 'block';
+      tip.style.left = '0px'; tip.style.top = '0px';
+      const rect = tip.getBoundingClientRect();
+      const pad = 12;
+      let x = (pendingTipPos ? pendingTipPos.x : 40) + 12;
+      let y = (pendingTipPos ? pendingTipPos.y : 40) + 12;
+      if(x + rect.width + pad > vw) x = vw - rect.width - pad;
+      if(y + rect.height + pad > vh) y = vh - rect.height - pad;
+      x = Math.max(pad, x); y = Math.max(pad, y);
+      tip.style.left = x + 'px';
+      tip.style.top  = y + 'px';
+    }
+    function hideTip(){ tip.style.display='none'; }
+
+    tipHdr.addEventListener('mousedown', (ev)=>{
+      if(tip.style.display!=='block') return;
+      _dragging = true;
+      const r = tip.getBoundingClientRect();
+      _dragOffset.x = ev.clientX - r.left;
+      _dragOffset.y = ev.clientY - r.top;
+      ev.preventDefault();
+    });
+    document.addEventListener('mousemove', (ev)=>{
+      if(!_dragging) return;
+      const vw = window.innerWidth, vh = window.innerHeight, pad=6;
+      let x = ev.clientX - _dragOffset.x, y = ev.clientY - _dragOffset.y;
+      const rect = tip.getBoundingClientRect();
+      if(x < pad) x = pad;
+      if(y < pad) y = pad;
+      if(x + rect.width + pad > vw) x = vw - rect.width - pad;
+      if(y + rect.height + pad > vh) y = vh - rect.height - pad;
+      tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    });
+    document.addEventListener('mouseup', ()=>{ _dragging=false; });
+
+    /* ================== 启动 ================== */
+    initNetwork();
+  </script>
+</body>
+</html>
