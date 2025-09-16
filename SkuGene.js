@@ -1049,9 +1049,10 @@ function renderTipList(){
     row+='<button class="edge-delete" data-peer="'+escapeHtml(n.id||'')+'">删除关系</button>';
     row+='</div>';
     if(tipShowReason){
-      const reasonText=n.reason? escapeHtml(n.reason):'';
-      if(reasonText){
-        row+='<div class="reason">'+reasonText+'</div>';
+      const reasonRaw=(n.reason||'').trim();
+      if(reasonRaw){
+        const reasonHtml=escapeHtml(reasonRaw).replace(/\r?\n+/g,'<br/>');
+        row+='<div class="reason">'+reasonHtml+'</div>';
       }
     }
     row+='</div>';
