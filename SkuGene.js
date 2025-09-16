@@ -209,7 +209,7 @@ function physicsProfile(){
   const profiles = {
     1: { solver:'forceAtlas2Based', fa2:{ gravitationalConstant:-20, centralGravity:0.01, springLength:120, springConstant:0.04, damping:0.5 }, minVelocity:0.5 },
     2: { solver:'forceAtlas2Based', fa2:{ gravitationalConstant:-30, centralGravity:0.03, springLength:120, springConstant:0.05, damping:0.45 }, minVelocity:0.3 },
-    3: { solver:'barnesHut',       bh:{ gravitationalConstant:-3200, centralGravity:0.25, springLength:110, springConstant:0.04, damping:0.32, avoidOverlap:0.6 }, minVelocity:0.2 },
+    3: { solver:'barnesHut',       bh:{ gravitationalConstant:-2600, centralGravity:0.22, springLength:115, springConstant:0.038, damping:0.34, avoidOverlap:0.55 }, minVelocity:0.25 },
     4: { solver:'barnesHut',       bh:{ gravitationalConstant:-4800, centralGravity:0.26, springLength:110, springConstant:0.045, damping:0.28, avoidOverlap:0.8 }, minVelocity:0.15 },
     5: { solver:'barnesHut',       bh:{ gravitationalConstant:-6800, centralGravity:0.27, springLength:100, springConstant:0.05,  damping:0.24, avoidOverlap:0.9 }, minVelocity:0.1 },
   };
@@ -259,7 +259,8 @@ function initNetwork(){
       const nid=params.nodes[0];
       if(nid.startsWith('C:')){ expandComponent(nid.slice(2)); ensurePhysicsOn(); }
       else if(nid.startsWith('P:')){ const [_,cid,prefix]=nid.split(':'); expandPrefix(cid,prefix); ensurePhysicsOn(); }
-      else{ const cid=componentIdOfNode(nid); if(cid) collapseComponent(cid); }
+      else if(nid.startsWith('N:')){ return; }
+      else{ const cid=componentIdOfNode(nid); if(cid && expandedState.has(cid)) collapseComponent(cid); }
     }
   });
 
@@ -689,7 +690,11 @@ function expandPrefix(cid, prefix){
 /* --------- 批量展开全部 --------- */
 function startExplodeAll(){
   if(!fullSummary) return;
-  explodeQueue = fullSummary.comps.filter(c=>c.size>1).map(c=>c.cid).sort((a,b)=>{
+  const minGroup = Number(document.getElementById('minGroup')?.value||1);
+  explodeQueue = fullSummary.comps
+    .filter(c=>c.size>=1 && c.size>=minGroup)
+    .map(c=>c.cid)
+    .sort((a,b)=>{
     const sa=fullSummary.comps.find(x=>x.cid===a)?.size??0;
     const sb=fullSummary.comps.find(x=>x.cid===b)?.size??0;
     return sa-sb;
