@@ -56,24 +56,26 @@ const workerSrc = `(() => {
       if(ra<rb) this.p.set(a,b); else if(ra>rb) this.p.set(b,a); else { this.p.set(b,a); this.r.set(a,ra+1); } } }
 
   function inferHeaderIndexes(rows){
-    let codeIdx=-1, nameIdx=-1, relIdx=-1;
+    let codeIdx=-1, nameIdx=-1, relIdx=-1, reasonIdx=-1;
     const headerCandidates = rows.slice(0,5);
     const codeHeads=["ID","Id","id","编码","编号","商品编码","物料编码","sku","SKU","商品ID","商品编号"];
     const nameHeads=["名称","商品名称","物料名称","品名","标题","name","Name"];
     const relHeads =["同品","同品ID","同品关系","关联","关联ID","相似","相似ID","peers","neighbors","links"];
+    const reasonHeads=["同品原因","原因","理由","reason"];
     for(const row of headerCandidates){
       row.forEach((cell,i)=>{
         const v=String(cell).trim(); if(!v) return;
         if(codeHeads.includes(v)) codeIdx=i;
         if(nameHeads.includes(v) && nameIdx===-1) nameIdx=i;
         if(relHeads.includes(v)) relIdx=i;
+      if(reasonHeads.includes(v) && reasonIdx===-1) reasonIdx=i;
       });
       if(codeIdx!==-1 && relIdx!==-1) break;
     }
     if(codeIdx===-1 && rows.length) codeIdx=0;
     if(nameIdx===-1 && rows.length && rows[0].length>=2) nameIdx=1;
     if(relIdx===-1 && rows.length && rows[0].length>=3) relIdx=2;
-    return { codeIdx, nameIdx, relIdx };
+    return { codeIdx, nameIdx, relIdx, reasonIdx };
   }
   const qtile=(arr,q)=>{ if(!arr.length) return 0; const a=arr.slice().sort((x,y)=>x-y);
     const pos=(a.length-1)*q, b=Math.floor(pos), r=pos-b; return a[b+1]!==undefined? a[b]+r*(a[b+1]-a[b]):a[b]; };
@@ -88,10 +90,12 @@ const workerSrc = `(() => {
         const sheetName = wb.SheetNames.includes(sheetNamePreferred) ? sheetNamePreferred : wb.SheetNames[0];
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:'' });
 
-        const { codeIdx, nameIdx, relIdx } = inferHeaderIndexes(rows);
+        const { codeIdx, nameIdx, relIdx, reasonIdx } = inferHeaderIndexes(rows);
         if(codeIdx===-1 || relIdx===-1){ self.postMessage({type:'error', message:'no_required_headers'}); return; }
 
-        const dsu=new DSU(); const edgesSet=new Set(); const nameOf=new Map(); const adj=new Map();
+        const dsu=new DSU(); const edgesSet=new Set(); const nameOf=new Map(); const adj=new Map(); const reasonMap=new Map();
+
+        const ensureReason=(id)=>{ if(!reasonMap.has(id)) reasonMap.set(id,new Map()); return reasonMap.get(id); };
         const total=rows.length-1; let processed=0;
 
         for(let r=1;r<rows.length;r++){
@@ -99,6 +103,29 @@ const workerSrc = `(() => {
           const code=String(row[codeIdx]||'').trim(); if(!code) continue;
           const name=String(row[nameIdx]||'').trim(); if(name && !nameOf.has(code)) nameOf.set(code,name);
           const rel =String(row[relIdx]||'').trim(); if(!rel) continue;
+          const reasonLookup=new Map();
+          if(reasonIdx!==-1){
+            const cell=row[reasonIdx];
+            const raw=cell===undefined||cell===null? '' : String(cell).trim();
+            if(raw){
+              try{
+                const parsed=JSON.parse(raw);
+                if(Array.isArray(parsed)){
+                  for(const item of parsed){
+                    const peerCode=String(item?.candidate_code||'').trim();
+                    if(!peerCode) continue;
+                    const info={};
+                    if(item?.reason!==undefined && item.reason!==null){ info.reason=String(item.reason).trim(); }
+                    if(item?.score!==undefined && item.score!==null && String(item.score).trim()!==''){
+                      const num=Number(item.score);
+                      info.score=Number.isFinite(num)? num : String(item.score).trim();
+                    }
+                    if(Object.keys(info).length>0){ reasonLookup.set(peerCode, info); }
+                  }
+                }
+              }catch{}
+            }
+          }
           const peers=rel.split(',').map(s=>s.trim()).filter(Boolean);
           for(const peer of peers){
             dsu.union(code,peer);
@@ -110,8 +137,14 @@ const workerSrc = `(() => {
                 if(!adj.has(peer)) adj.set(peer,new Set());
                 adj.get(code).add(peer); adj.get(peer).add(code);
               }
+              const info=reasonLookup.get(peer);
+              if(info){
+                const entryA=ensureReason(code); entryA.set(peer, info);
+                const entryB=ensureReason(peer); entryB.set(code, info);
+              }
             }
           }
+
           processed++; if(processed%2000===0){ self.postMessage({type:'progress', p:Math.round(processed/total*50)}); }
         }
 
@@ -131,7 +164,7 @@ const workerSrc = `(() => {
         const edgesByComp=new Map(); for(const key of edgesSet){ const [a,b]=key.split('::'); const c=compOf.get(a); edgesByComp.set(c,(edgesByComp.get(c)||0)+1); }
         const compList = Array.from(comps.entries()).map(([cid,set])=>({cid,size:set.size})).sort((a,b)=>b.size-a.size);
 
-        self.state = { comps, compOf, edgesGlobal:edgesSet, nameOf, adj, parsed:true };
+        self.state = { comps, compOf, edgesGlobal:edgesSet, nameOf, adj, parsed:true, reasons:reasonMap };
         self.postMessage({ type:'summary',
           comps: compList, totalNodes: ids.size, totalEdges: edgesSet.size,
           degreeMax: degMax, degreeP95: degP95,
@@ -168,7 +201,12 @@ const workerSrc = `(() => {
       self.postMessage({ type:'componentData', cid, nodes, names, degrees, edges, prefixMap, prefixEdges });
     } else if(type==='neighbors'){
       const s=self.state; const id=e.data.id; const set=(s?.adj.get(id)||new Set());
-      const neighbors = Array.from(set).map(n=>({id:n, name: s?.nameOf.get(n)||''}));
+      const neighbors = Array.from(set).map(n=>{
+        const info = s?.reasons?.get(id)?.get(n) || s?.reasons?.get(n)?.get(id) || null;
+        const reason = info?.reason ?? '';
+        const score = info?.score ?? null;
+        return {id:n, name: s?.nameOf.get(n)||'', reason, score};
+      });
       self.postMessage({ type:'neighbors', id, name:(s?.nameOf.get(id)||''), degree:set.size, neighbors });
     } else if(type==='getDegrees'){
       const s=self.state; const ids=e.data.ids||[]; const out={};
@@ -333,7 +371,7 @@ function ensureWorker(){
 }
 
 /* --------- 主线程解析（含中文修复） --------- */
-let MT_ctx={ parsed:false, comps:null, compOf:null, edgesGlobal:null, nameOf:null, adj:null, edgesByComp:null };
+let MT_ctx={ parsed:false, comps:null, compOf:null, edgesGlobal:null, nameOf:null, adj:null, edgesByComp:null, reasons:null };
 function DSU(){ this.p=new Map(); this.r=new Map(); }
 DSU.prototype.make=function(x){ if(!this.p.has(x)){ this.p.set(x,x); this.r.set(x,0);} };
 DSU.prototype.find=function(x){ let p=this.p.get(x); if(p!==x){ p=this.find(p); this.p.set(x,p);} return p; };
@@ -341,24 +379,26 @@ DSU.prototype.union=function(a,b){ this.make(a); this.make(b); a=this.find(a); b
   const ra=this.r.get(a), rb=this.r.get(b); if(ra<rb) this.p.set(a,b); else if(ra>rb) this.p.set(b,a); else { this.p.set(b,a); this.r.set(a,ra+1);} };
 
 function inferHeaderIndexes(rows){
-  let codeIdx=-1, nameIdx=-1, relIdx=-1;
+  let codeIdx=-1, nameIdx=-1, relIdx=-1, reasonIdx=-1;
   const headerCandidates = rows.slice(0,5);
   const codeHeads=["ID","Id","id","编码","编号","商品编码","物料编码","sku","SKU","商品ID","商品编号"];
   const nameHeads=["名称","商品名称","物料名称","品名","标题","name","Name"];
   const relHeads =["同品","同品ID","同品关系","关联","关联ID","相似","相似ID","peers","neighbors","links"];
+  const reasonHeads=["同品原因","原因","理由","reason"];
   for(const row of headerCandidates){
     row.forEach((cell,i)=>{
       const v=String(cell).trim(); if(!v) return;
       if(codeHeads.includes(v)) codeIdx=i;
       if(nameHeads.includes(v) && nameIdx===-1) nameIdx=i;
       if(relHeads.includes(v)) relIdx=i;
+      if(reasonHeads.includes(v) && reasonIdx===-1) reasonIdx=i;
     });
     if(codeIdx!==-1 && relIdx!==-1) break;
   }
   if(codeIdx===-1 && rows.length) codeIdx=0;
   if(nameIdx===-1 && rows.length && rows[0].length>=2) nameIdx=1;
   if(relIdx===-1 && rows.length && rows[0].length>=3) relIdx=2;
-  return { codeIdx, nameIdx, relIdx };
+  return { codeIdx, nameIdx, relIdx, reasonIdx };
 }
 function quantile(arr,q){ if(!arr.length) return 0; const a=arr.slice().sort((x,y)=>x-y); const pos=(a.length-1)*q, b=Math.floor(pos), r=pos-b; return a[b+1]!==undefined? a[b]+r*(a[b+1]-a[b]):a[b]; }
 
@@ -369,10 +409,12 @@ function parseOnMainThread(buffer, sheetNamePreferred){
   const sheetName = wb.SheetNames.includes(sheetNamePreferred)? sheetNamePreferred : wb.SheetNames[0];
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:'' });
 
-  const { codeIdx, nameIdx, relIdx }=inferHeaderIndexes(rows);
+  const { codeIdx, nameIdx, relIdx, reasonIdx }=inferHeaderIndexes(rows);
   if(codeIdx===-1 || relIdx===-1) throw new Error('no_required_headers');
 
-  const dsu=new DSU(); const edgesSet=new Set(); const nameOf=new Map(); const adj=new Map();
+  const dsu=new DSU(); const edgesSet=new Set(); const nameOf=new Map(); const adj=new Map(); const reasonMap=new Map();
+
+  const ensureReason=(id)=>{ if(!reasonMap.has(id)) reasonMap.set(id,new Map()); return reasonMap.get(id); };
   const total=rows.length-1; let processed=0;
 
   for(let r=1;r<rows.length;r++){
@@ -380,6 +422,29 @@ function parseOnMainThread(buffer, sheetNamePreferred){
     const code=String(row[codeIdx]||'').trim(); if(!code) continue;
     const name=String(row[nameIdx]||'').trim(); if(name && !nameOf.has(code)) nameOf.set(code,name);
     const rel =String(row[relIdx]||'').trim(); if(!rel) continue;
+    const reasonLookup=new Map();
+    if(reasonIdx!==-1){
+      const cell=row[reasonIdx];
+      const raw=cell===undefined||cell===null? '' : String(cell).trim();
+      if(raw){
+        try{
+          const parsed=JSON.parse(raw);
+          if(Array.isArray(parsed)){
+            for(const item of parsed){
+              const peerCode=String(item?.candidate_code||'').trim();
+              if(!peerCode) continue;
+              const info={};
+              if(item?.reason!==undefined && item.reason!==null){ info.reason=String(item.reason).trim(); }
+              if(item?.score!==undefined && item.score!==null && String(item.score).trim()!==''){
+                const num=Number(item.score);
+                info.score=Number.isFinite(num)? num : String(item.score).trim();
+              }
+              if(Object.keys(info).length>0){ reasonLookup.set(peerCode, info); }
+            }
+          }
+        }catch{}
+      }
+    }
     const peers=rel.split(',').map(s=>s.trim()).filter(Boolean);
     for(const peer of peers){
       dsu.union(code,peer);
@@ -391,8 +456,14 @@ function parseOnMainThread(buffer, sheetNamePreferred){
           if(!adj.has(peer)) adj.set(peer,new Set());
           adj.get(code).add(peer); adj.get(peer).add(code);
         }
+        const info=reasonLookup.get(peer);
+        if(info){
+          const entryA=ensureReason(code); entryA.set(peer, info);
+          const entryB=ensureReason(peer); entryB.set(code, info);
+        }
       }
     }
+
     processed++; if(processed%2000===0){ setProgress(Math.round(processed/total*50)); }
   }
 
@@ -412,11 +483,16 @@ function parseOnMainThread(buffer, sheetNamePreferred){
   const edgesByComp=new Map(); for(const key of edgesSet){ const [a,b]=key.split('::'); const c=compOf.get(a); edgesByComp.set(c,(edgesByComp.get(c)||0)+1); }
   const compList=Array.from(comps.entries()).map(([cid,set])=>({cid,size:set.size})).sort((a,b)=>b.size-a.size);
 
-  MT_ctx={ parsed:true, comps, compOf, edgesGlobal:edgesSet, nameOf, adj, edgesByComp };
+  MT_ctx={ parsed:true, comps, compOf, edgesGlobal:edgesSet, nameOf, adj, edgesByComp, reasons:reasonMap };
   return { comps:compList, totalNodes:ids.size, totalEdges:edgesSet.size, degreeMax:degMax, degreeP95:degP95,
            edgesByComp:Array.from(edgesByComp.entries()).map(([cid,count])=>({cid,count})) };
 }
-function neighborsMainThread(id){ const set=(MT_ctx.adj?.get(id)||new Set()); const neighbors=Array.from(set).map(n=>({id:n, name:MT_ctx.nameOf?.get(n)||''}));
+function neighborsMainThread(id){ const set=(MT_ctx.adj?.get(id)||new Set()); const neighbors=Array.from(set).map(n=>{
+  const info = MT_ctx.reasons?.get(id)?.get(n) || MT_ctx.reasons?.get(n)?.get(id) || null;
+  const reason = info?.reason ?? '';
+  const score = info?.score ?? null;
+  return {id:n, name:MT_ctx.nameOf?.get(n)||'', reason, score};
+});
   return { type:'neighbors', id, name:MT_ctx.nameOf?.get(id)||'', degree:set.size, neighbors }; }
 
 /* --------- 解析完成 → 初始渲染 --------- */
@@ -754,16 +830,115 @@ function resetAll(){
 /* --------- 浮窗 --------- */
 let pendingTipPos=null, _dragging=false, _dragOffset={x:0,y:0};
 const tip=document.getElementById('tooltip'), tipHdr=document.getElementById('tipDrag');
+const tipTitleEl=document.getElementById('tipTitle');
+const tipMetaEl=document.getElementById('tipMeta');
+const tipListEl=document.getElementById('tipList');
+const tipActionsEl=document.getElementById('tipActions');
+const toggleReasonBtn=document.getElementById('toggleReason');
+let tipShowReason=false;
+let tipData=null;
+
+const htmlEscapeMap={ '&':'&amp;', '<':'&lt;', '>':'&gt;' };
+htmlEscapeMap['"']='&quot;';
+htmlEscapeMap["'"]='&#39;';
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>"']/g, ch=>htmlEscapeMap[ch]||ch);
+}
+function formatScore(score){
+  if(score===null || score===undefined || score==='') return '';
+  if(typeof score==='number'){
+    const rounded=Math.round(score*10)/10;
+    return Number.isInteger(rounded)? String(Math.trunc(rounded)) : String(rounded);
+  }
+  const num=Number(score);
+  if(Number.isFinite(num)){
+    const rounded=Math.round(num*10)/10;
+    return Number.isInteger(rounded)? String(Math.trunc(rounded)) : String(rounded);
+  }
+  return String(score);
+}
+function updateReasonToggle(){
+  if(!tipActionsEl || !toggleReasonBtn) return;
+  const hasReason=!!(tipData?.neighbors?.some(n=>{
+    const reason=typeof n.reason==='string'? n.reason.trim():'';
+    const score=n.score;
+    return (reason&&reason.length>0) || (score!==null && score!==undefined && String(score).trim()!=='');
+  }));
+  if(!hasReason){
+    tipShowReason=false;
+    tipActionsEl.style.display='none';
+    toggleReasonBtn.classList.remove('active');
+    return;
+  }
+  tipActionsEl.style.display='flex';
+  toggleReasonBtn.textContent = tipShowReason ? '\u9690\u85cf\u540c\u54c1\u539f\u56e0' : '\u663e\u793a\u540c\u54c1\u539f\u56e0';
+  toggleReasonBtn.classList.toggle('active', tipShowReason);
+}
+function renderTipList(){
+  if(!tipListEl) return;
+  if(!tipData){
+    tipListEl.innerHTML='';
+    return;
+  }
+  const neighbors=Array.isArray(tipData.neighbors)? tipData.neighbors : [];
+  const maxShow=200;
+  const rows=neighbors.slice(0,maxShow).map(n=>{
+    let row='<div class="neighbor"><div class="neighbor-line"><code>'+escapeHtml(n.id||'')+'</code>';
+    if(n.name){
+      row+='<span class="name">'+escapeHtml(n.name)+'</span>';
+    }
+    if(tipShowReason){
+      const scoreText=formatScore(n.score);
+      if(scoreText){
+        row+='<span class="score">\u5f97\u5206: '+escapeHtml(scoreText)+'</span>';
+      }
+    }
+    row+='</div>';
+    if(tipShowReason){
+      const reasonText=n.reason? escapeHtml(n.reason):'';
+      if(reasonText){
+        row+='<div class="reason">'+reasonText+'</div>';
+      }
+    }
+    row+='</div>';
+    return row;
+  }).join('');
+  const remainder=neighbors.length>maxShow ? '<div class="hint">\u5176\u4f59\u5171 '+neighbors.length+' \u4e2a\u90bb\u5c45\uff0c\u5df2\u622a\u65ad\u3002</div>' : '';
+  tipListEl.innerHTML = rows + remainder;
+}
 function showTip(data){
-  document.getElementById('tipTitle').textContent=`${data.id} ${data.name||''}`.trim();
-  document.getElementById('tipMeta').textContent=`度数：${data.degree} · 前 ${Math.min(200, data.neighbors.length)} 个邻居如下`;
-  const maxShow=200; const rows=data.neighbors.slice(0,maxShow).map(n=>`<div><code>${n.id}</code>${(n.name||'')}</div>`).join('');
-  document.getElementById('tipList').innerHTML = rows + (data.neighbors.length>maxShow ? `<div class="hint">其余共 ${data.neighbors.length} 个邻居，已截断。</div>` : '');
+  tipData=data;
+  tipShowReason=false;
+  if(tipTitleEl) tipTitleEl.textContent=`${data.id} ${data.name||''}`.trim();
+  if(tipMetaEl) tipMetaEl.textContent=`\u5ea6\u6570\uff1a${data.degree} \u00b7 \u524d ${Math.min(200, data.neighbors.length)} \u4e2a\u90bb\u5c45\u5982\u4e0b`;
+  updateReasonToggle();
+  renderTipList();
   const vw=innerWidth, vh=innerHeight; tip.style.display='block'; tip.style.left='0px'; tip.style.top='0px';
   const rect=tip.getBoundingClientRect(), pad=12; let x=(pendingTipPos? pendingTipPos.x:40)+12, y=(pendingTipPos? pendingTipPos.y:40)+12;
   if(x+rect.width+pad>vw) x=vw-rect.width-pad; if(y+rect.height+pad>vh) y=vh-rect.height-pad; x=Math.max(pad,x); y=Math.max(pad,y); tip.style.left=x+'px'; tip.style.top=y+'px';
 }
-function hideTip(){ tip.style.display='none'; }
+function hideTip(){
+  tip.style.display='none';
+  tipData=null;
+  tipShowReason=false;
+  if(tipListEl) tipListEl.innerHTML='';
+  if(tipMetaEl) tipMetaEl.textContent='';
+  updateReasonToggle();
+}
+if(toggleReasonBtn){
+  toggleReasonBtn.addEventListener('click', ()=>{
+    if(!tipData) return;
+    const hasReason=(tipData.neighbors||[]).some(n=>{
+      const reason=typeof n.reason==='string'? n.reason.trim():'';
+      const score=n.score;
+      return (reason&&reason.length>0) || (score!==null && score!==undefined && String(score).trim()!=='');
+    });
+    if(!hasReason) return;
+    tipShowReason=!tipShowReason;
+    updateReasonToggle();
+    renderTipList();
+  });
+}
 tipHdr.addEventListener('mousedown', (ev)=>{ if(tip.style.display!=='block') return; _dragging=true; const r=tip.getBoundingClientRect(); _dragOffset.x=ev.clientX-r.left; _dragOffset.y=ev.clientY-r.top; ev.preventDefault(); });
 addEventListener('mousemove',(ev)=>{ if(!_dragging) return; const vw=innerWidth,vh=innerHeight,pad=6; let x=ev.clientX-_dragOffset.x,y=ev.clientY-_dragOffset.y; const rect=tip.getBoundingClientRect();
   if(x<pad) x=pad; if(y<pad) y=pad; if(x+rect.width+pad>vw) x=vw-rect.width-pad; if(y+rect.height+pad>vh) y=vh-rect.height-pad; tip.style.left=x+'px'; tip.style.top=y+'px'; });
