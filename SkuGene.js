@@ -228,6 +228,7 @@ const FULL_NODE_LIMIT=1200;
 let explodeQueue=[]; let exploding=false; let paused=false;
 let currentGroup=null; // 用于 ETA/进度
 let firstBatchDoneForCid=new Set(); // 防“空屏”
+let deletedNodes=new Set(); let deletedEdges=new Set(); const undoStack=[];
 
 /* --------- UI：扩散强度 & 展开速度 --------- */
 const speedInput = document.getElementById('speed');
@@ -323,6 +324,26 @@ document.getElementById('pause').addEventListener('click',()=>{
 document.getElementById('reset').addEventListener('click',()=> network?.fit({animation:true}));
 document.getElementById('export').addEventListener('click', exportPNG);
 document.getElementById('go').addEventListener('click', locateNode);
+
+addEventListener('keydown',(ev)=>{
+  const targetTag = ev.target?.tagName?.toLowerCase();
+  if(targetTag==='input' || targetTag==='textarea' || ev.target?.isContentEditable) return;
+  if(ev.key==='Delete' && !ev.ctrlKey && !ev.metaKey && !ev.altKey){
+    const selectedNodes = network?.getSelectedNodes?.() || [];
+    if(selectedNodes.length){
+      if(removeNode(selectedNodes[0])) ev.preventDefault();
+      return;
+    }
+    const selectedEdges = network?.getSelectedEdges?.() || [];
+    if(selectedEdges.length){
+      if(removeEdgeById(selectedEdges[0])) ev.preventDefault();
+    }
+  }
+  if((ev.key==='z' || ev.key==='Z') && (ev.ctrlKey || ev.metaKey)){
+    ev.preventDefault();
+    undoLast();
+  }
+});
 
 const minGroupInput=document.getElementById('minGroup');
 minGroupInput.addEventListener('input',()=>{ document.getElementById('minGroupLabel').textContent='≥ '+(minGroupInput.value||'2'); renderCollapsed(); if(exploding) updateETA(); });
@@ -667,15 +688,21 @@ function renderFullComponent(cid, deferRemove){
   const st=expandedState.get(cid); if(!st || !st._payload) return;
   const payload=st._payload; st._payload=null; st.mode='full';
 
-  const ids=payload.nodes||[]; const edges=payload.edges||[];
-  const degrees=payload.degrees||{};
-  const ring=ringPositions(ids.length, Math.min(200 + ids.length*0.02, 600), 10);
-  const visNodes=ids.map((id,i)=>({ id:'N:'+id, label:(ids.length<=1500)? id:undefined,
+  const rawIds=payload.nodes||[]; const rawEdges=payload.edges||[]; const degrees=payload.degrees||{};
+  const nodeIds=rawIds.filter(id=>!deletedNodes.has('N:'+id));
+  const ring=ringPositions(nodeIds.length, Math.min(200 + nodeIds.length*0.02, 600), 10);
+  const visNodes=nodeIds.map((id,i)=>({ id:'N:'+id, label:(nodeIds.length<=1500)? id:undefined,
     color:{ background: colorNodeByDegree(degrees[id]||0), border:'#0b1020' },
     x:st.anchor.x + ring[i].x, y:st.anchor.y + ring[i].y }));
+  const edgeList=rawEdges.filter(([a,b])=>!deletedNodes.has('N:'+a) && !deletedNodes.has('N:'+b) && !deletedEdges.has(canonicalEdgeKey('N:'+a,'N:'+b)));
 
   const cfg=getBatchConfig();
-  currentGroup={ cid, mode:'full', totalNodes:ids.length, totalEdges:edges.length, addedNodes:0, addedEdges:0 };
+  currentGroup={ cid, mode:'full', totalNodes:nodeIds.length, totalEdges:edgeList.length, addedNodes:0, addedEdges:0 };
+
+  if(visNodes.length===0 && deferRemove){
+    if(nodesDS.get('C:'+cid)){ try{ nodesDS.remove('C:'+cid); }catch{} }
+    firstBatchDoneForCid.add(cid);
+  }
 
   // 先注入节点，第一批完成后再移除组件气泡，避免“空屏”
   let firstBatchRemoved=false;
@@ -683,14 +710,14 @@ function renderFullComponent(cid, deferRemove){
     nodesDS.add(chunk); chunk.forEach(n=>{ st.nodes.add(n.id); st.nodeToCid.set(n.id, cid); });
     currentGroup.addedNodes+=chunk.length;
     if(!firstBatchRemoved && deferRemove){
-      // 第一批完成（至少一次 onEach）
+      // 第一批完成（至少一个 onEach）
       firstBatchRemoved=true;
       if(nodesDS.get('C:'+cid)){ try{ nodesDS.remove('C:'+cid); }catch{} }
       firstBatchDoneForCid.add(cid);
     }
   }, ()=>{
     // 再注入边
-    const visEdges=edges.map(([a,b],i)=>({ id:`E:${cid}:${i}`, from:'N:'+a, to:'N:'+b }));
+    const visEdges=edgeList.map(([a,b],i)=>({ id:`E:${cid}:${i}`, from:'N:'+a, to:'N:'+b }));
     addInFrames(visEdges, cfg.edgeChunk, (chunk)=>{
       edgesDS.add(chunk); chunk.forEach(e=> st.edges.add(e.id)); currentGroup.addedEdges+=chunk.length;
     }, ()=>{
@@ -793,6 +820,19 @@ function componentIdOfNode(nid){
   }
   return null;
 }
+
+function canonicalEdgeKey(a,b){
+  const pair=[a,b].filter(Boolean).sort();
+  return pair[0]+'::'+pair[1];
+}
+function applyNeighborFilters(baseNid, neighbors){
+  return (neighbors||[]).filter(n=>{
+    const targetId='N:'+(n.id||'');
+    if(deletedNodes.has(targetId)) return false;
+    if(deletedEdges.has(canonicalEdgeKey(baseNid, targetId))) return false;
+    return true;
+  });
+}
 function updateETA(){
   if(!fullSummary || !explodeQueue){ document.getElementById('eta').textContent='ETA: --'; return; }
   const cfg=getBatchConfig();
@@ -810,6 +850,96 @@ function updateETA(){
   }
   document.getElementById('eta').textContent='ETA: ~ '+(totalSteps<=1? '几秒' : (totalSteps*0.4|0)+'s'); // 粗略
 }
+function pushUndo(entry){ if(!entry) return; undoStack.push(entry); if(undoStack.length>100) undoStack.shift(); }
+function removeNode(nodeId, {recordUndo=true}={}){
+  if(!nodeId || !nodesDS) return false;
+  if(!nodeId.startsWith('N:')) return false;
+  const node=nodesDS.get(nodeId); if(!node) return false;
+  const edges=edgesDS?.get?.({ filter:e=>(e.from===nodeId || e.to===nodeId) }) || [];
+  const cid=componentIdOfNode(nodeId);
+  const cidsByEdge={};
+  edges.forEach(e=>{
+    for(const [cidKey, st] of expandedState.entries()){
+      if(st.edges?.has(e.id)){
+        (cidsByEdge[e.id] ||= []).push(cidKey);
+        st.edges.delete(e.id);
+      }
+    }
+    edgesDS.remove(e.id);
+    if(e.from.startsWith('N:') && e.to.startsWith('N:')){ deletedEdges.add(canonicalEdgeKey(e.from,e.to)); }
+  });
+  nodesDS.remove(nodeId);
+  if(cid){
+    const st=expandedState.get(cid);
+    if(st){ st.nodes?.delete(nodeId); st.prefixClusters?.delete(nodeId); st.nodeToCid?.delete(nodeId); }
+  }
+  deletedNodes.add(nodeId);
+  if(tipData && ('N:'+tipData.id)===nodeId){ hideTip(); } else { pruneTipNeighborsByNode(nodeId); }
+  if(recordUndo){ pushUndo({ type:'node', node, edges, cid, cidsByEdge }); }
+  updateStats(); updateETA(); ensurePhysicsOn();
+  return true;
+}
+function removeEdgesBetweenNodes(nidA, nidB, {recordUndo=true}={}){
+  if(!nidA || !nidB || !edgesDS) return false;
+  if(!nidA.startsWith('N:') || !nidB.startsWith('N:')) return false;
+  const edges=edgesDS.get({ filter:e=> (e.from===nidA && e.to===nidB) || (e.from===nidB && e.to===nidA) }) || [];
+  if(!edges.length) return false;
+  const cidsByEdge={};
+  edges.forEach(e=>{
+    for(const [cidKey, st] of expandedState.entries()){
+      if(st.edges?.has(e.id)){
+        (cidsByEdge[e.id] ||= []).push(cidKey);
+        st.edges.delete(e.id);
+      }
+    }
+    edgesDS.remove(e.id);
+  });
+  if(nidA.startsWith('N:') && nidB.startsWith('N:')){ deletedEdges.add(canonicalEdgeKey(nidA,nidB)); }
+  updateTipAfterEdgeRemoval(nidA, nidB);
+  if(recordUndo){ pushUndo({ type:'edges', edges, nodes:[nidA,nidB], cidsByEdge }); }
+  updateStats(); updateETA(); ensurePhysicsOn();
+  return true;
+}
+function removeEdgeById(edgeId, {recordUndo=true}={}){
+  if(!edgeId || !edgesDS) return false;
+  const edge=edgesDS.get(edgeId); if(!edge) return false;
+  return removeEdgesBetweenNodes(edge.from, edge.to, {recordUndo});
+}
+function undoLast(){
+  const entry=undoStack.pop(); if(!entry) return;
+  hideTip();
+  if(entry.type==='node'){
+    const {node, edges=[], cid, cidsByEdge={}} = entry;
+    if(node){
+      deletedNodes.delete(node.id);
+      nodesDS.add(node);
+      if(cid){
+        const st=expandedState.get(cid);
+        if(st){ st.nodeToCid?.set(node.id, cid); if(node.id.startsWith('N:')) st.nodes?.add(node.id); if(node.id.startsWith('P:')) st.prefixClusters?.add(node.id); }
+      }
+    }
+    for(const e of edges){
+      edgesDS.add(e);
+      if(e.from.startsWith('N:') && e.to.startsWith('N:')){ deletedEdges.delete(canonicalEdgeKey(e.from,e.to)); }
+      const list=cidsByEdge[e.id];
+      if(list){ for(const cidKey of list){ const st=expandedState.get(cidKey); if(st){ st.edges?.add(e.id); } } }
+    }
+    updateStats(); updateETA(); ensurePhysicsOn();
+    return;
+  }
+  if(entry.type==='edges'){
+    const {edges=[], nodes=[], cidsByEdge={}} = entry;
+    for(const e of edges){
+      edgesDS.add(e);
+      if(e.from.startsWith('N:') && e.to.startsWith('N:')){ deletedEdges.delete(canonicalEdgeKey(e.from,e.to)); }
+      const list=cidsByEdge[e.id];
+      if(list){ for(const cidKey of list){ const st=expandedState.get(cidKey); if(st){ st.edges?.add(e.id); } } }
+    }
+    if(nodes.length===2){ deletedEdges.delete(canonicalEdgeKey(nodes[0], nodes[1])); }
+    updateStats(); updateETA(); ensurePhysicsOn();
+  }
+}
+
 function locateNode(){
   const id=(document.getElementById('search').value||'').trim(); if(!id) return;
   const nid = nodesDS.get('N:'+id)? 'N:'+id : nodesDS.get('C:'+id)? 'C:'+id : null;
@@ -824,6 +954,7 @@ function resetAll(){
   nodesDS?.clear?.(); edgesDS?.clear?.(); expandedState.clear(); firstBatchDoneForCid.clear(); fullSummary=null;
   DEGREE_CAP=0; DEGREE_MAX=0; GROUP_CAP=0; GROUP_MAX=0; GROUP_CAP_ALL=0; GROUP_CAP_NOSINGLES=0; EDGES_PER_COMP=new Map();
   currentGroup=null; explodeQueue=[]; exploding=false; paused=false; setProgress(0,''); document.getElementById('pause').disabled=true;
+    deletedNodes.clear(); deletedEdges.clear(); undoStack.length=0;
   document.getElementById('pause').textContent='暂停'; document.getElementById('eta').textContent='ETA: --'; hideTip(); updateStats(); updateLegends();
 }
 
@@ -835,6 +966,8 @@ const tipMetaEl=document.getElementById('tipMeta');
 const tipListEl=document.getElementById('tipList');
 const tipActionsEl=document.getElementById('tipActions');
 const toggleReasonBtn=document.getElementById('toggleReason');
+const tipDeleteBtn=document.getElementById('deleteNode');
+if(tipDeleteBtn){ tipDeleteBtn.disabled=true; }
 let tipShowReason=false;
 let tipData=null;
 
@@ -857,27 +990,46 @@ function formatScore(score){
   }
   return String(score);
 }
-function updateReasonToggle(){
-  if(!tipActionsEl || !toggleReasonBtn) return;
-  const hasReason=!!(tipData?.neighbors?.some(n=>{
+function neighborsHaveDetails(neighbors){
+  return neighbors.some(n=>{
     const reason=typeof n.reason==='string'? n.reason.trim():'';
     const score=n.score;
-    return (reason&&reason.length>0) || (score!==null && score!==undefined && String(score).trim()!=='');
-  }));
-  if(!hasReason){
-    tipShowReason=false;
-    tipActionsEl.style.display='none';
-    toggleReasonBtn.classList.remove('active');
-    return;
+    return (reason && reason.length>0) || (score!==null && score!==undefined && String(score).trim()!=='');
+  });
+}
+function updateTipMeta(){
+  if(!tipMetaEl){ return; }
+  if(!tipData){ tipMetaEl.textContent=''; return; }
+  const total=tipData.neighbors?.length ?? 0;
+  tipMetaEl.textContent = '度数：'+total+' · 前 '+Math.min(200, total)+' 个邻居如下';
+}
+function updateReasonToggle(){
+  if(!tipActionsEl) return;
+  const neighbors=Array.isArray(tipData?.neighbors)? tipData.neighbors : [];
+  const hasReason = neighbors.length>0 && neighborsHaveDetails(neighbors);
+  if(toggleReasonBtn){
+    if(hasReason){
+      toggleReasonBtn.style.display='';
+      toggleReasonBtn.textContent = tipShowReason ? '隐藏同品原因' : '显示同品原因';
+      toggleReasonBtn.classList.toggle('active', tipShowReason);
+    }else{
+      toggleReasonBtn.style.display='none';
+      toggleReasonBtn.classList.remove('active');
+      tipShowReason=false;
+    }
   }
-  tipActionsEl.style.display='flex';
-  toggleReasonBtn.textContent = tipShowReason ? '\u9690\u85cf\u540c\u54c1\u539f\u56e0' : '\u663e\u793a\u540c\u54c1\u539f\u56e0';
-  toggleReasonBtn.classList.toggle('active', tipShowReason);
+  if(tipDeleteBtn){
+    tipDeleteBtn.disabled = !tipData;
+  }
+  const actionsVisible = (toggleReasonBtn && toggleReasonBtn.style.display!=='none') || (tipDeleteBtn && !tipDeleteBtn.disabled);
+  tipActionsEl.style.display = actionsVisible? 'flex':'none';
 }
 function renderTipList(){
   if(!tipListEl) return;
   if(!tipData){
     tipListEl.innerHTML='';
+    updateTipMeta();
+    updateReasonToggle();
     return;
   }
   const neighbors=Array.isArray(tipData.neighbors)? tipData.neighbors : [];
@@ -887,12 +1039,14 @@ function renderTipList(){
     if(n.name){
       row+='<span class="name">'+escapeHtml(n.name)+'</span>';
     }
+    row+='<span class="spacer"></span>';
     if(tipShowReason){
       const scoreText=formatScore(n.score);
       if(scoreText){
-        row+='<span class="score">\u5f97\u5206: '+escapeHtml(scoreText)+'</span>';
+        row+='<span class="score">得分: '+escapeHtml(scoreText)+'</span>';
       }
     }
+    row+='<button class="edge-delete" data-peer="'+escapeHtml(n.id||'')+'">删除关系</button>';
     row+='</div>';
     if(tipShowReason){
       const reasonText=n.reason? escapeHtml(n.reason):'';
@@ -903,15 +1057,25 @@ function renderTipList(){
     row+='</div>';
     return row;
   }).join('');
-  const remainder=neighbors.length>maxShow ? '<div class="hint">\u5176\u4f59\u5171 '+neighbors.length+' \u4e2a\u90bb\u5c45\uff0c\u5df2\u622a\u65ad\u3002</div>' : '';
+  const remainder=neighbors.length>maxShow ? '<div class="hint">其余共 '+neighbors.length+' 个邻居，已截断。</div>' : '';
   tipListEl.innerHTML = rows + remainder;
+  tipData.degree = neighbors.length;
+  updateTipMeta();
+  updateReasonToggle();
 }
 function showTip(data){
-  tipData=data;
+  if(!data) return;
+  const baseId=data.id;
+  const baseNid='N:'+baseId;
+  const neighborsRaw=Array.isArray(data.neighbors)? data.neighbors.slice():[];
+  const filtered=applyNeighborFilters(baseNid, neighborsRaw);
+  tipData={ ...data, neighbors:filtered, degree:filtered.length, baseNid };
   tipShowReason=false;
-  if(tipTitleEl) tipTitleEl.textContent=`${data.id} ${data.name||''}`.trim();
-  if(tipMetaEl) tipMetaEl.textContent=`\u5ea6\u6570\uff1a${data.degree} \u00b7 \u524d ${Math.min(200, data.neighbors.length)} \u4e2a\u90bb\u5c45\u5982\u4e0b`;
-  updateReasonToggle();
+    if(tipTitleEl) tipTitleEl.textContent=`${data.id} ${data.name||''}`.trim();
+  if(tipDeleteBtn){
+    tipDeleteBtn.disabled=false;
+    tipDeleteBtn.dataset.target=baseNid;
+  }
   renderTipList();
   const vw=innerWidth, vh=innerHeight; tip.style.display='block'; tip.style.left='0px'; tip.style.top='0px';
   const rect=tip.getBoundingClientRect(), pad=12; let x=(pendingTipPos? pendingTipPos.x:40)+12, y=(pendingTipPos? pendingTipPos.y:40)+12;
@@ -923,26 +1087,63 @@ function hideTip(){
   tipShowReason=false;
   if(tipListEl) tipListEl.innerHTML='';
   if(tipMetaEl) tipMetaEl.textContent='';
+  if(tipDeleteBtn){
+    tipDeleteBtn.disabled=true;
+    tipDeleteBtn.removeAttribute('data-target');
+  }
   updateReasonToggle();
 }
 if(toggleReasonBtn){
   toggleReasonBtn.addEventListener('click', ()=>{
     if(!tipData) return;
-    const hasReason=(tipData.neighbors||[]).some(n=>{
-      const reason=typeof n.reason==='string'? n.reason.trim():'';
-      const score=n.score;
-      return (reason&&reason.length>0) || (score!==null && score!==undefined && String(score).trim()!=='');
-    });
-    if(!hasReason) return;
+    const neighbors=Array.isArray(tipData.neighbors)? tipData.neighbors : [];
+    if(!neighborsHaveDetails(neighbors)) return;
     tipShowReason=!tipShowReason;
-    updateReasonToggle();
     renderTipList();
   });
 }
+if(tipDeleteBtn){
+  tipDeleteBtn.addEventListener('click', ()=>{
+    if(!tipData) return;
+    const target=tipDeleteBtn.dataset.target || ('N:'+tipData.id);
+    removeNode(target);
+  });
+}
+if(tipListEl){
+  tipListEl.addEventListener('click', (ev)=>{
+    const btn = ev.target.closest ? ev.target.closest('.edge-delete') : (ev.target.classList.contains('edge-delete')? ev.target:null);
+    if(!btn) return;
+    if(!tipData) return;
+    const peer=btn.dataset.peer;
+    if(!peer) return;
+    removeEdgesBetweenNodes('N:'+tipData.id, 'N:'+peer);
+  });
+}
+updateReasonToggle();
 tipHdr.addEventListener('mousedown', (ev)=>{ if(tip.style.display!=='block') return; _dragging=true; const r=tip.getBoundingClientRect(); _dragOffset.x=ev.clientX-r.left; _dragOffset.y=ev.clientY-r.top; ev.preventDefault(); });
 addEventListener('mousemove',(ev)=>{ if(!_dragging) return; const vw=innerWidth,vh=innerHeight,pad=6; let x=ev.clientX-_dragOffset.x,y=ev.clientY-_dragOffset.y; const rect=tip.getBoundingClientRect();
   if(x<pad) x=pad; if(y<pad) y=pad; if(x+rect.width+pad>vw) x=vw-rect.width-pad; if(y+rect.height+pad>vh) y=vh-rect.height-pad; tip.style.left=x+'px'; tip.style.top=y+'px'; });
 addEventListener('mouseup',()=>{ _dragging=false; });
+function pruneTipNeighborsByNode(nodeId){
+  if(!tipData || !Array.isArray(tipData.neighbors)) return;
+  const target = nodeId.startsWith('N:')? nodeId.slice(2) : nodeId;
+  const before = tipData.neighbors.length;
+  tipData.neighbors = tipData.neighbors.filter(n=>n.id!==target);
+  if(before!==tipData.neighbors.length){
+    renderTipList();
+  }
+}
+function updateTipAfterEdgeRemoval(nidA, nidB){
+  if(!tipData || !Array.isArray(tipData.neighbors)) return;
+  const baseNid='N:'+tipData.id;
+  if(baseNid!==nidA && baseNid!==nidB) return;
+  const other = baseNid===nidA? nidB : nidA;
+  const before = tipData.neighbors.length;
+  tipData.neighbors = tipData.neighbors.filter(n=>('N:'+n.id)!==other);
+  if(before!==tipData.neighbors.length){
+    renderTipList();
+  }
+}
 
 /* --------- 启动：加载依赖 → cpexcel → Worker → init --------- */
 (function bootstrap(){

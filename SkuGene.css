@@ -56,14 +56,21 @@
   #tooltip .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
   #tooltip .list{max-height:260px;overflow:auto;font-size:12px;line-height:1.5}
   #tooltip .list code{background:#0c1220;padding:2px 4px;border-radius:6px;margin-right:6px}
-#tooltip .actions{display:none;justify-content:flex-end;gap:8px;margin:6px 0 8px}
-#tooltip .actions .toggle{background:#141c2e;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer}
-#tooltip .actions .toggle:hover{background:#19243a}
+#tooltip .actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0 8px;flex-wrap:wrap}
+#tooltip .actions button{border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:#141c2e;color:var(--text)}
+#tooltip .actions button:hover{background:#19243a}
 #tooltip .actions .toggle.active{background:var(--accent);color:#07240f;border-color:#0f5132}
 #tooltip .list .neighbor{padding:6px 0;border-bottom:1px solid rgba(148,163,184,0.18)}
 #tooltip .list .neighbor:last-child{border-bottom:none}
 #tooltip .list .neighbor-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 #tooltip .list .neighbor-line .name{flex:1;min-width:0}
-#tooltip .list .score{margin-left:auto;font-size:12px;color:var(--muted)}
+#tooltip .list .score{margin-left:8px;font-size:12px;color:var(--muted)}
 #tooltip .list .reason{margin-top:4px;font-size:12px;color:var(--muted);white-space:pre-wrap;line-height:1.4}
   #tooltip .close{background:#111827;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:4px 8px;cursor:pointer;font-size:12px}
+
+#tooltip .actions .danger{background:#b91c1c;border-color:#7f1d1d;color:#fff}
+#tooltip .actions .danger:hover{background:#a31616}
+#tooltip .actions .danger:disabled{opacity:0.45;cursor:not-allowed;background:#7f1d1d;border-color:#5f1414}
+#tooltip .list .neighbor-line .edge-delete{background:#3b1d1d;border:1px solid #7f1d1d;color:#fca5a5;border-radius:6px;padding:2px 6px;font-size:11px;cursor:pointer;margin-left:8px}
+#tooltip .list .neighbor-line .edge-delete:hover{background:#5f1b1b}
+#tooltip .list .neighbor-line .spacer{flex:1}
