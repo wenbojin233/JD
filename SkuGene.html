@@ -100,6 +100,39 @@
         </div>
       </div>
     </div>
+
+    <button type="button" id="toggleGroupPanel" class="group-panel-toggle" aria-expanded="false" aria-controls="groupPanel">同品组列表</button>
+    <aside class="group-panel" id="groupPanel" aria-hidden="true">
+      <div class="group-panel__inner">
+        <div class="group-panel__header">
+          <h3>同品组列表</h3>
+          <div class="group-panel__tools">
+            <span id="groupListCount" class="hint">等待加载</span>
+            <button type="button" id="closeGroupPanel" class="group-panel-close" aria-label="关闭同品组列表">✕</button>
+          </div>
+        </div>
+        <div id="groupList" class="group-list">
+          <div class="placeholder hint">请先加载数据以查看同品组。</div>
+        </div>
+      </div>
+    </aside>
+
+    <button type="button" id="toggleConfirmedPanel" class="confirmed-panel-toggle" aria-expanded="false" aria-controls="confirmedPanel">已确认同品组</button>
+    <aside class="confirmed-panel" id="confirmedPanel" aria-hidden="true">
+      <div class="confirmed-panel__inner">
+        <div class="confirmed-panel__header">
+          <h3>已确认同品组</h3>
+          <div class="confirmed-panel__tools">
+            <span id="confirmedListCount" class="hint">0 组</span>
+            <button type="button" id="closeConfirmedPanel" class="confirmed-panel-close" aria-label="关闭已确认同品组">✕</button>
+          </div>
+        </div>
+        <div id="confirmedList" class="group-list confirmed-list">
+          <div class="placeholder hint">暂无已确认的同品组。</div>
+        </div>
+      </div>
+    </aside>
+
   </div>
 
   <!-- 浮动节点信息框 -->

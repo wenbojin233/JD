@@ -5,16 +5,8 @@ const groupListCountEl = document.getElementById('groupListCount');
 const groupPanelEl = document.getElementById('groupPanel');
 const groupPanelToggle = document.getElementById('toggleGroupPanel');
 const groupPanelClose = document.getElementById('closeGroupPanel');
-const confirmedPanelEl = document.getElementById('confirmedPanel');
-const confirmedPanelToggle = document.getElementById('toggleConfirmedPanel');
-const confirmedPanelClose = document.getElementById('closeConfirmedPanel');
-const confirmedListEl = document.getElementById('confirmedList');
-const confirmedListCountEl = document.getElementById('confirmedListCount');
 const groupPanelToggleDefault = groupPanelToggle ? (groupPanelToggle.textContent || '').trim() : '同品组列表';
 const GROUP_PANEL_TOGGLE_CLOSE_LABEL = '收起同品组';
-const confirmedPanelToggleDefault = confirmedPanelToggle ? (confirmedPanelToggle.textContent || '').trim() : '已确认同品组';
-const CONFIRMED_PANEL_TOGGLE_CLOSE_LABEL = '收起已确认组';
-const confirmedGroups = new Set();
 let activeGroupCid = null;
 const setStatus = (t)=>{ statusEl.textContent = t; console.log('[状态]', t); };
 function loadScriptChain(urls, test, onOk, onFail){
@@ -534,8 +526,7 @@ function neighborsMainThread(id){ const set=(MT_ctx.adj?.get(id)||new Set()); co
 
 /* --------- 解析完成 → 初始渲染 --------- */
 function onSummary(e){
-  fullSummary = { comps:e.comps, totalNodes:e.totalNodes, totalEdges:e.totalEdges, degreeMax:e.degreeMax||0, degreeP95:e.degreeP95||0, edgesByComp:e.edgesByComp||[], indexByCid:new Map((e.comps||[]).map((c,idx)=>[String(c.cid), idx+1])) };
-  if(fullSummary.indexByCid && fullSummary.indexByCid instanceof Map===false){ fullSummary.indexByCid = new Map((e.comps||[]).map((c,idx)=>[String(c.cid), idx+1])); }
+  fullSummary = { comps:e.comps, totalNodes:e.totalNodes, totalEdges:e.totalEdges, degreeMax:e.degreeMax||0, degreeP95:e.degreeP95||0, edgesByComp:e.edgesByComp||[] };
   DEGREE_MAX = fullSummary.degreeMax||0;
   DEGREE_CAP = Math.max(1, Math.round(fullSummary.degreeP95||DEGREE_MAX));
   GROUP_MAX = fullSummary.comps.length? Math.max(...fullSummary.comps.map(c=>c.size)) : 0;
@@ -544,7 +535,7 @@ function onSummary(e){
   GROUP_CAP_NOSINGLES = percentile(sizesAll.filter(s=>s>1), 0.95);
   GROUP_CAP = GROUP_CAP_ALL;
 
-  EDGES_PER_COMP = new Map((fullSummary.edgesByComp||[]).map(o=>[String(o.cid), o.count||0]));
+  EDGES_PER_COMP = new Map((fullSummary.edgesByComp||[]).map(o=>[o.cid, o.count||0]));
   renderCollapsed(); updateLegends(); setStatus(`已加载：节点 ${e.totalNodes} · 边 ${e.totalEdges} · 组件 ${e.comps.length}`);
   setProgress(100,'解析完成，可展开并持续扩散。'); applyPhysics();
 }
@@ -576,6 +567,7 @@ function ringPositions(n,R=120,jitter=8){ const out=[], step=(2*Math.PI)/Math.ma
   return out;
 }
 
+
 function isGroupPanelOpen(){
   return !!(groupPanelEl && groupPanelEl.classList.contains('open'));
 }
@@ -604,171 +596,71 @@ function toggleGroupPanel(){
   if(isGroupPanelOpen()){ closeGroupPanel(); }
   else{ openGroupPanel(); }
 }
-function isConfirmedPanelOpen(){
-  return !!(confirmedPanelEl && confirmedPanelEl.classList.contains('open'));
-}
-function openConfirmedPanel(){
-  if(!confirmedPanelEl) return;
-  confirmedPanelEl.classList.add('open');
-  confirmedPanelEl.setAttribute('aria-hidden','false');
-  document.body.classList.add('confirmed-panel-open');
-  if(confirmedPanelToggle){
-    confirmedPanelToggle.setAttribute('aria-expanded','true');
-    confirmedPanelToggle.textContent = CONFIRMED_PANEL_TOGGLE_CLOSE_LABEL;
-  }
-}
-function closeConfirmedPanel(){
-  if(!confirmedPanelEl) return;
-  confirmedPanelEl.classList.remove('open');
-  confirmedPanelEl.setAttribute('aria-hidden','true');
-  document.body.classList.remove('confirmed-panel-open');
-  if(confirmedPanelToggle){
-    confirmedPanelToggle.setAttribute('aria-expanded','false');
-    confirmedPanelToggle.textContent = confirmedPanelToggleDefault;
-  }
-}
-function toggleConfirmedPanel(){
-  if(isConfirmedPanelOpen()){ closeConfirmedPanel(); }
-  else{ openConfirmedPanel(); }
-}
-function getGroupDisplayIndex(cid){
-  const key = String(cid ?? '');
-  if(!key) return null;
-  if(fullSummary?.indexByCid instanceof Map){
-    const idx = fullSummary.indexByCid.get(key);
-    if(Number.isFinite(idx)) return idx;
-  }
-  if(Array.isArray(fullSummary?.comps)){
-    const found = fullSummary.comps.findIndex(c=>String(c.cid)===key);
-    if(found>=0){
-      const idx = found+1;
-      if(fullSummary.indexByCid instanceof Map){ fullSummary.indexByCid.set(key, idx); }
-      return idx;
-    }
-  }
-  return null;
-}
 function setActiveGroup(cid, options){
   const opts = options || {};
   const target = cid === undefined || cid === null ? null : String(cid);
   activeGroupCid = target;
-  const lists = [groupListEl, confirmedListEl].filter(Boolean);
+  if(!groupListEl) return;
+  const items = groupListEl.querySelectorAll('.group-item');
   let activeEl=null;
-  for(const list of lists){
-    list.querySelectorAll('.group-item').forEach(el=>{
-      const match = target!==null && el.dataset.cid===target;
-      el.classList.toggle('active', match);
-      if(match) activeEl=el;
-    });
-  }
-  const preferScroll = opts.scroll !== undefined ? opts.scroll : (isGroupPanelOpen() || isConfirmedPanelOpen());
+  items.forEach(el=>{
+    const match = target!==null && el.dataset.cid===target;
+    el.classList.toggle('active', match);
+    if(match) activeEl=el;
+  });
+  const preferScroll = opts.scroll !== undefined ? opts.scroll : isGroupPanelOpen();
   if(activeEl && preferScroll){
-    try{ activeEl.scrollIntoView({ block:'nearest', behavior: opts.behavior || 'smooth' }); }
-    catch(err){
+    try{
+      activeEl.scrollIntoView({ block:'nearest', behavior: opts.behavior || 'smooth' });
+    }catch(err){
       try{ activeEl.scrollIntoView({ block:'nearest' }); }catch{}
     }
   }
 }
+
 function renderGroupList(preselect){
-  if(!groupListEl){
-    renderConfirmedList(null, preselect === undefined ? null : String(preselect));
-    return;
-  }
+  if(!groupListEl) return;
   if(!fullSummary){
     if(groupListCountEl) groupListCountEl.textContent = '等待加载';
     groupListEl.innerHTML = '<div class="placeholder hint">请先加载数据以查看同品组。</div>';
-    renderConfirmedList(null, null);
-    if(confirmedListCountEl) confirmedListCountEl.textContent = '0 组';
     activeGroupCid = null;
     return;
   }
   const minGroup = Number(document.getElementById('minGroup')?.value || 2);
   const comps = fullSummary.comps || [];
-  const compIdSet = new Set(comps.map(c=>String(c.cid)));
-  for(const cid of Array.from(confirmedGroups)){
-    if(!compIdSet.has(cid)) confirmedGroups.delete(cid);
-  }
-  const pendingRaw = comps.filter(c=>c.size>=minGroup && !confirmedGroups.has(String(c.cid)));
-  const confirmedRaw = comps.filter(c=>confirmedGroups.has(String(c.cid)));
-  const pending = [];
-  const seenPending=new Set();
-  for(const c of pendingRaw){ const key=String(c.cid); if(!seenPending.has(key)){ seenPending.add(key); pending.push(c); } }
-  const confirmed = [];
-  const seenConfirmed=new Set();
-  for(const c of confirmedRaw){ const key=String(c.cid); if(!seenConfirmed.has(key)){ seenConfirmed.add(key); confirmed.push(c); } }
+  const filtered = comps.filter(c=>c.size>=minGroup);
   if(groupListCountEl){
-    groupListCountEl.textContent = pending.length ? `待确认 ${pending.length} 组 · 节点 ≥ ${minGroup}` : '待确认 0 组';
+    groupListCountEl.textContent = filtered.length ? 共  组 · 节点≥ : '0 组';
   }
-  if(confirmedListCountEl){
-    confirmedListCountEl.textContent = confirmed.length ? `已确认 ${confirmed.length} 组` : '已确认 0 组';
+  if(!filtered.length){
+    groupListEl.innerHTML = '<div class="placeholder hint">暂无符合当前筛选的同品组。</div>';
+    activeGroupCid = null;
+    return;
   }
   const preselectKey = preselect === undefined || preselect === null ? null : String(preselect);
   const currentKey = preselectKey !== null ? preselectKey : activeGroupCid;
-  const pendingHas = currentKey !== null && pending.some(c=>String(c.cid)===currentKey);
-  const confirmedHas = currentKey !== null && confirmed.some(c=>String(c.cid)===currentKey);
-  const selectedKey = (pendingHas || confirmedHas) ? currentKey : null;
-  if(pending.length){
-    const rows = pending.map((c, idx)=>{
-      const cidRaw = String(c.cid ?? '');
-      const displayIndex = getGroupDisplayIndex(cidRaw) ?? (idx + 1);
-      const label = `第 ${displayIndex} 组`;
-      const edgesCount = (EDGES_PER_COMP instanceof Map) ? EDGES_PER_COMP.get(String(c.cid)) : undefined;
-      const metaRight = Number.isFinite(edgesCount) ? `节点 ${c.size} · 边 ${edgesCount}` : `节点 ${c.size}`;
-      const klass = selectedKey !== null && String(c.cid) === selectedKey ? 'group-item active' : 'group-item';
-      const padded = displayIndex.toString().padStart(2,'0');
-      const titleAttr = cidRaw ? ` title="组ID：${escapeHtml(cidRaw)}"` : '';
-      const idInfo = cidRaw ? ` · ${escapeHtml(cidRaw)}` : '';
-      return `<div class="${klass}" data-cid="${cidRaw}"><div class="meta"><span class="tag">#${padded}</span><span>${metaRight}</span></div><div class="title"${titleAttr}>${label}${idInfo}</div><div class="group-actions"><button type="button" data-action="focus">定位</button><button type="button" data-action="expand">展开</button><button type="button" data-action="confirm" class="confirm">确认</button></div></div>`;
-    }).join('');
-    groupListEl.innerHTML = rows;
-  }else{
-    groupListEl.innerHTML = '<div class="placeholder hint">暂无符合当前筛选的同品组。</div>';
-  }
-  renderConfirmedList(confirmed, selectedKey);
-  setActiveGroup(selectedKey, { scroll:isGroupPanelOpen() || isConfirmedPanelOpen() });
-}
-function renderConfirmedList(list, selectedKey){
-  if(!confirmedListEl) return;
-  if(!list || !list.length){
-    confirmedListEl.innerHTML = '<div class="placeholder hint">暂无已确认的同品组。</div>';
-    return;
-  }
-  const rows = list.map((c, idx)=>{
+  const hasActive = currentKey !== null && filtered.some(c=>String(c.cid) === currentKey);
+  const selectedKey = hasActive ? currentKey : null;
+  const rows = filtered.map((c, idx)=>{
     const cidRaw = String(c.cid ?? '');
-    const displayIndex = getGroupDisplayIndex(cidRaw) ?? (idx + 1);
-    const label = `第 ${displayIndex} 组`;
-    const edgesCount = (EDGES_PER_COMP instanceof Map) ? EDGES_PER_COMP.get(String(c.cid)) : undefined;
-    const metaRight = Number.isFinite(edgesCount) ? `节点 ${c.size} · 边 ${edgesCount}` : `节点 ${c.size}`;
+    const displayIndex = idx + 1;
+    const label = 第  组;
+    const edgesCount = (EDGES_PER_COMP instanceof Map) ? EDGES_PER_COMP.get(c.cid) : undefined;
+    const metaRight = Number.isFinite(edgesCount) ? 节点  · 边  : 节点 ;
     const klass = selectedKey !== null && String(c.cid) === selectedKey ? 'group-item active' : 'group-item';
     const padded = displayIndex.toString().padStart(2,'0');
-    const titleAttr = cidRaw ? ` title="组ID：${escapeHtml(cidRaw)}"` : '';
-    const idInfo = cidRaw ? ` · ${escapeHtml(cidRaw)}` : '';
-    return `<div class="${klass}" data-cid="${cidRaw}"><div class="meta"><span class="tag">#${padded}</span><span>${metaRight}</span></div><div class="title"${titleAttr}>${label}${idInfo}</div><div class="group-actions"><button type="button" data-action="focus">定位</button><button type="button" data-action="expand">展开</button><button type="button" data-action="undo" class="undo">撤销确认</button></div></div>`;
+    const titleAttr = cidRaw ?  title="组ID：" : '';
+    return <div class="" data-cid=""><div class="meta"><span class="tag">#</span><span></span></div><div class="title"></div><div class="group-actions"><button type="button" data-action="focus">定位</button><button type="button" data-action="expand">展开</button></div></div>;
   }).join('');
-  confirmedListEl.innerHTML = rows;
+  groupListEl.innerHTML = rows;
+  setActiveGroup(selectedKey, { scroll:isGroupPanelOpen() });
 }
-function confirmGroup(cid){
-  cid = String(cid);
-  if(!confirmedGroups.has(cid)){
-    confirmedGroups.add(cid);
-    if(confirmedPanelToggle && !isConfirmedPanelOpen()){
-      openConfirmedPanel();
-    }
-  }
-  renderGroupList(cid);
-}
-function undoConfirmGroup(cid){
-  cid = String(cid);
-  confirmedGroups.delete(cid);
-  renderGroupList(cid);
-}
-
 function focusComponent(cid){
   if(!cid || !network) return;
   const targetId = 'C:'+cid;
-  let node=null;
+  let node = null;
   if(nodesDS && typeof nodesDS.get === 'function'){
-    try{ node = nodesDS.get(targetId); }catch(err){ node=null; }
+    try{ node = nodesDS.get(targetId); }catch(err){ node = null; }
   }
   if(node){
     try{
@@ -787,7 +679,6 @@ function focusComponent(cid){
     }catch(err){ console.warn('定位展开组件失败', err); }
   }
 }
-
 if(groupListEl){
   groupListEl.addEventListener('click', (ev)=>{
     const origin = ev.target instanceof Element ? ev.target : ev.target?.parentElement || null;
@@ -799,30 +690,9 @@ if(groupListEl){
     const actionBtn = origin.closest('[data-action]');
     if(actionBtn){
       const action = actionBtn.dataset.action;
-      if(action === 'expand'){ expandComponent(cid); setActiveGroup(cid); }
-      else if(action === 'focus'){ focusComponent(cid); setActiveGroup(cid); }
-      else if(action === 'confirm'){ confirmGroup(cid); }
-      ev.preventDefault();
-      return;
-    }
-    focusComponent(cid);
-    setActiveGroup(cid);
-  });
-}
-if(confirmedListEl){
-  confirmedListEl.addEventListener('click', (ev)=>{
-    const origin = ev.target instanceof Element ? ev.target : ev.target?.parentElement || null;
-    if(!origin) return;
-    const item = origin.closest('.group-item');
-    if(!item) return;
-    const cid = item.dataset.cid;
-    if(!cid) return;
-    const actionBtn = origin.closest('[data-action]');
-    if(actionBtn){
-      const action = actionBtn.dataset.action;
-      if(action === 'expand'){ expandComponent(cid); setActiveGroup(cid); }
-      else if(action === 'focus'){ focusComponent(cid); setActiveGroup(cid); }
-      else if(action === 'undo'){ undoConfirmGroup(cid); }
+      if(action === 'expand'){ expandComponent(cid); }
+      else if(action === 'focus'){ focusComponent(cid); }
+      setActiveGroup(cid);
       ev.preventDefault();
       return;
     }
@@ -837,18 +707,9 @@ if(groupPanelToggle){
 if(groupPanelClose){
   groupPanelClose.addEventListener('click', ()=>{ closeGroupPanel(); });
 }
-if(confirmedPanelToggle){
-  confirmedPanelToggle.addEventListener('click', ()=>{ toggleConfirmedPanel(); });
-}
-if(confirmedPanelClose){
-  confirmedPanelClose.addEventListener('click', ()=>{ closeConfirmedPanel(); });
-}
 document.addEventListener('keydown', (ev)=>{
-  if(ev.key === 'Escape'){
-    let handled=false;
-    if(isGroupPanelOpen()){ closeGroupPanel(); handled=true; }
-    if(isConfirmedPanelOpen()){ closeConfirmedPanel(); handled=true; }
-    if(handled){ ev.preventDefault(); }
+  if(ev.key === 'Escape' && isGroupPanelOpen()){
+    closeGroupPanel();
   }
 });
 
@@ -908,7 +769,7 @@ function addInFrames(items, chunkSize, onEach, onDone){
 /* --------- 展开/收起 --------- */
 function expandComponent(cid, forceMode=null){
   cid = String(cid);
-  const compInfo=fullSummary.comps.find(x=>String(x.cid)===cid); if(!compInfo) return;
+  const compInfo=fullSummary.comps.find(x=>x.cid===cid); if(!compInfo) return;
   setActiveGroup(cid);
   const mode = forceMode || (compInfo.size<=FULL_NODE_LIMIT ? 'full':'prefix');
 
@@ -930,7 +791,7 @@ function collapseComponent(cid){
   cid = String(cid);
   const st=expandedState.get(cid);
   if(st){ nodesDS.remove(Array.from(st.nodes)); edgesDS.remove(Array.from(st.edges)); nodesDS.remove(Array.from(st.prefixClusters)); expandedState.delete(cid); }
-  const comp=fullSummary.comps.find(c=>String(c.cid)===cid);
+  const comp=fullSummary.comps.find(c=>c.cid===cid);
   const minGroup=Number(document.getElementById('minGroup')?.value||2);
   if(comp && comp.size>=minGroup){
     const n={ id:'C:'+cid, label:'n='+comp.size, title:'n='+comp.size, value:comp.size, group:'COMP',
@@ -947,7 +808,7 @@ function requestComponent(cid, opts, cb){
   document.getElementById('hint').textContent='加载组件数据：'+cid;
   if(useWorker && workerReady){
     const onData=(e)=>{
-      if(e.data?.type==='componentData' && String(e.data.cid)===cid){
+      if(e.data?.type==='componentData' && e.data.cid===cid){
         worker.removeEventListener('message', onData);
         cacheComponentData(e.data); try{ cb(); }catch(err){ console.error(err); }
       }
@@ -956,13 +817,7 @@ function requestComponent(cid, opts, cb){
     worker.postMessage({type:'getComponent', cid, ...opts});
   }else{
     // 主线程构造
-    let set=MT_ctx.comps.get(cid);
-    if(!set){
-      const numCid=Number(cid);
-      if(!Number.isNaN(numCid)) set=MT_ctx.comps.get(numCid);
-    }
-    if(!set) set=new Set();
-    const nodes=Array.from(set);
+    const set=MT_ctx.comps.get(cid); const nodes=Array.from(set||[]);
     const names={}, degrees={}; for(const id of nodes){ names[id]=MT_ctx.nameOf.get(id)||''; degrees[id]=(MT_ctx.adj.get(id)||new Set()).size; }
     let edges=null, prefixMap=null, prefixEdges=null;
     if(opts.needEdges){
@@ -985,10 +840,8 @@ function requestComponent(cid, opts, cb){
   }
 }
 function cacheComponentData(data){
-  const cid = String(data.cid);
-  const st=expandedState.get(cid) || { nodes:new Set(), edges:new Set(), prefixClusters:new Set(), nodeToCid:new Map(), anchor:null, names:{} };
-  const normalized = { ...data, cid };
-  st._payload=normalized; st.names=normalized.names||st.names; expandedState.set(cid, st);
+  const st=expandedState.get(data.cid) || { nodes:new Set(), edges:new Set(), prefixClusters:new Set(), nodeToCid:new Map(), anchor:null, names:{} };
+  st._payload=data; st.names=data.names||st.names; expandedState.set(data.cid, st);
 }
 
 /* --------- 渲染：完整节点/边 --------- */
@@ -1085,20 +938,14 @@ function expandPrefix(cid, prefix){
     else{
       if(useWorker && workerReady){
         const onData=(e)=>{
-          if(e.data?.type==='componentData' && String(e.data.cid)===cid){
+          if(e.data?.type==='componentData' && e.data.cid===cid){
             worker.removeEventListener('message', onData);
             const m=new Map((e.data.prefixMap||[]).map(o=>[o.prefix, o.nodes])); st._prefixCache=m; cb(m);
           }
         }; worker.addEventListener('message', onData);
         worker.postMessage({type:'getComponent', cid, needEdges:false, needPrefix:true});
       }else{
-        let set=MT_ctx.comps.get(cid);
-        if(!set){
-          const numCid=Number(cid);
-          if(!Number.isNaN(numCid)) set=MT_ctx.comps.get(numCid);
-        }
-        if(!set) set=new Set();
-        const nodes=Array.from(set);
+        const set=MT_ctx.comps.get(cid); const nodes=Array.from(set||[]);
         const pmap=new Map(); for(const id of nodes){ const p=String(id).slice(0,3); if(!pmap.has(p)) pmap.set(p,[]); pmap.get(p).push(id); }
         st._prefixCache=pmap; cb(pmap);
       }
@@ -1115,8 +962,8 @@ function startExplodeAll(){
     .filter(c=>c.size>=1 && c.size>=minGroup)
     .map(c=>String(c.cid))
     .sort((a,b)=>{
-    const sa=fullSummary.comps.find(x=>String(x.cid)===a)?.size??0;
-    const sb=fullSummary.comps.find(x=>String(x.cid)===b)?.size??0;
+    const sa=fullSummary.comps.find(x=>x.cid===a)?.size??0;
+    const sb=fullSummary.comps.find(x=>x.cid===b)?.size??0;
     return sa-sb;
   });
   renderCollapsed(); exploding=true; paused=false;
@@ -1125,7 +972,7 @@ function startExplodeAll(){
 function scheduleNextExplode(){
   if(!exploding || paused) return;
   if(explodeQueue.length===0){ ensurePhysicsOn(); hideTip(); updateETA(); return; }
-  const cid=explodeQueue.shift(); updateETA(); expandComponent(cid);
+  const cid = String(explodeQueue.shift()); updateETA(); expandComponent(cid);
   setTimeout(scheduleNextExplode, 200); // 更快的节奏
 }
 
@@ -1153,7 +1000,7 @@ function applyNeighborFilters(baseNid, neighbors){
 function updateETA(){
   if(!fullSummary || !explodeQueue){ document.getElementById('eta').textContent='ETA: --'; return; }
   const cfg=getBatchConfig();
-  const sizesMap=new Map(fullSummary.comps.map(c=>[String(c.cid),c.size]));
+  const sizesMap=new Map(fullSummary.comps.map(c=>[c.cid,c.size]));
   let totalSteps=0;
   if(currentGroup){
     const nodesLeft=Math.max(0,(currentGroup.totalNodes||0)-(currentGroup.addedNodes||0));
@@ -1272,14 +1119,7 @@ function resetAll(){
   DEGREE_CAP=0; DEGREE_MAX=0; GROUP_CAP=0; GROUP_MAX=0; GROUP_CAP_ALL=0; GROUP_CAP_NOSINGLES=0; EDGES_PER_COMP=new Map();
   currentGroup=null; explodeQueue=[]; exploding=false; paused=false; setProgress(0,''); document.getElementById('pause').disabled=true;
     deletedNodes.clear(); deletedEdges.clear(); undoStack.length=0;
-  document.getElementById('pause').textContent='暂停'; document.getElementById('eta').textContent='ETA: --';
-  hideTip();
-  closeGroupPanel();
-  closeConfirmedPanel();
-  confirmedGroups.clear();
-  renderGroupList();
-  updateStats();
-  updateLegends();
+  document.getElementById('pause').textContent='暂停'; document.getElementById('eta').textContent='ETA: --'; hideTip(); renderGroupList(); updateStats(); updateLegends();
 }
 
 /* --------- 浮窗 --------- */
@@ -1363,7 +1203,6 @@ function renderTipList(){
     if(n.name){
       row+='<span class="name">'+escapeHtml(n.name)+'</span>';
     }
-    row+='<span class="spacer"></span>';
     if(tipShowReason){
       const scoreText=formatScore(n.score);
       if(scoreText){
