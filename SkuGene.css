@@ -34,11 +34,11 @@
   .pill{padding:6px 10px;border-radius:999px;background:#0f1524;border:1px solid var(--border);color:var(--muted)}
   #network{height:68vh;min-height:520px;border:1px dashed var(--border);border-radius:14px;background:linear-gradient(180deg,#0e1422,#0b0f17)}
   .footer{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
-  .stats{display:flex;gap:10px;flex-wrap:wrap}
+  .stats{display:flex;gap:10px;flex-wrap:nowrap}
   .badge{background:#0f1524;border:1px solid var(--border);border-radius:999px;padding:6px 10px;color:var(--muted)}
   .progress{height:8px;background:#0f1524;border:1px solid var(--border);border-radius:999px;overflow:hidden;min-width:220px}
   .bar{height:100%;background:var(--accent);width:0%}
-  .legends{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  .legends{display:flex;gap:16px;align-items:center;flex-wrap:nowrap}
   .legend{display:flex;align-items:center;gap:8px}
   .legend .title{font-size:12px;color:var(--muted);min-width:78px;text-align:right}
   .legend .grad{width:160px;height:10px;border-radius:6px;border:1px solid var(--border);
@@ -56,27 +56,28 @@
   #tooltip .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
   #tooltip .list{max-height:260px;overflow:auto;font-size:12px;line-height:1.5;padding-right:12px;scrollbar-gutter:stable both-edges}
   #tooltip .list code{background:#0c1220;padding:2px 4px;border-radius:6px;margin-right:6px}
-#tooltip .actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0 8px;flex-wrap:wrap}
+#tooltip .actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0 8px;flex-wrap:nowrap}
 #tooltip .actions button{border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:#141c2e;color:var(--text)}
 #tooltip .actions button:hover{background:#19243a}
 #tooltip .actions .toggle.active{background:var(--accent);color:#07240f;border-color:#0f5132}
 #tooltip .list .neighbor{padding:6px 0;border-bottom:1px solid rgba(148,163,184,0.18)}
 #tooltip .list .neighbor:last-child{border-bottom:none}
-#tooltip .list .neighbor-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#tooltip .list .neighbor-line{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px}
 
-#tooltip .list .neighbor-line .name{flex:0 1 auto;min-width:0;white-space:normal;word-break:break-word;line-height:1.3}
-#tooltip .list .score{margin-left:auto;font-size:12px;color:var(--muted)}
+#tooltip .list .neighbor-line .name{grid-column:2;min-width:0;word-break:break-word;line-height:1.4}
+#tooltip .list .score{grid-column:3;margin-left:0;font-size:12px;color:var(--muted);white-space:nowrap}
 #tooltip .list .reason{margin-top:4px;font-size:12px;color:var(--muted);white-space:normal;word-break:break-word;line-height:1.45}
   #tooltip .close{background:#111827;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:4px 8px;cursor:pointer;font-size:12px}
 
 #tooltip .actions .danger{background:#b91c1c;border-color:#7f1d1d;color:#fff}
 #tooltip .actions .danger:hover{background:#a31616}
 #tooltip .actions .danger:disabled{opacity:0.45;cursor:not-allowed;background:#7f1d1d;border-color:#5f1414}
-#tooltip .list .neighbor-line .edge-delete{background:#3b1d1d;border:1px solid #7f1d1d;color:#fca5a5;border-radius:6px;padding:2px 6px;font-size:11px;cursor:pointer;margin-left:8px}
+#tooltip .list .neighbor-line .edge-delete{grid-column:4;background:#3b1d1d;border:1px solid #7f1d1d;color:#fca5a5;border-radius:6px;padding:2px 6px;font-size:11px;cursor:pointer;white-space:nowrap}
 #tooltip .list .neighbor-line .edge-delete:hover{background:#5f1b1b}
-#tooltip .list .neighbor-line .spacer{flex:1 1 auto;min-width:12px}
 
 #tooltip .list::-webkit-scrollbar{width:6px}
 #tooltip .list::-webkit-scrollbar-thumb{background:rgba(148,163,184,0.35);border-radius:6px}
 #tooltip .list::-webkit-scrollbar-track{background:transparent}
-#tooltip .list .neighbor-line code,#tooltip .list .neighbor-line .score,#tooltip .list .neighbor-line .edge-delete{flex-shrink:0}
+#tooltip .list .neighbor-line code{grid-column:1;white-space:nowrap}
+
+#tooltip .list .neighbor-line .spacer{display:none}

@@ -1039,7 +1039,6 @@ function renderTipList(){
     if(n.name){
       row+='<span class="name">'+escapeHtml(n.name)+'</span>';
     }
-    row+='<span class="spacer"></span>';
     if(tipShowReason){
       const scoreText=formatScore(n.score);
       if(scoreText){
