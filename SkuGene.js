@@ -10,12 +10,74 @@ const confirmedPanelToggle = document.getElementById('toggleConfirmedPanel');
 const confirmedPanelClose = document.getElementById('closeConfirmedPanel');
 const confirmedListEl = document.getElementById('confirmedList');
 const confirmedListCountEl = document.getElementById('confirmedListCount');
+const themeToggleBtn = document.getElementById('toggleTheme');
 const groupPanelToggleDefault = groupPanelToggle ? (groupPanelToggle.textContent || '').trim() : '同品组列表';
 const GROUP_PANEL_TOGGLE_CLOSE_LABEL = '收起同品组';
 const confirmedPanelToggleDefault = confirmedPanelToggle ? (confirmedPanelToggle.textContent || '').trim() : '已确认同品组';
 const CONFIRMED_PANEL_TOGGLE_CLOSE_LABEL = '收起已确认组';
+const THEME_STORAGE_KEY = 'skuGene_theme';
 const confirmedGroups = new Set();
 let activeGroupCid = null;
+function applyThemePreference(theme){
+  const isLight = theme === 'light';
+  document.body.classList.toggle('theme-light', isLight);
+  if(themeToggleBtn){
+    themeToggleBtn.textContent = isLight ? '切换黑暗模式' : '切换白天模式';
+    themeToggleBtn.setAttribute('aria-pressed', isLight ? 'true' : 'false');
+  }
+}
+function inferInitialTheme(){
+  try{
+    if(typeof localStorage !== 'undefined'){
+      const stored = localStorage.getItem(THEME_STORAGE_KEY);
+      if(stored === 'light' || stored === 'dark'){
+        return stored;
+      }
+    }
+  }catch(e){}
+  try{
+    if(window.matchMedia){
+      return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+  }catch(e){}
+  return 'dark';
+}
+let currentTheme = inferInitialTheme();
+applyThemePreference(currentTheme);
+(function subscribeSystemTheme(){
+  try{
+    if(window.matchMedia){
+      const mq = window.matchMedia('(prefers-color-scheme: light)');
+      const handler = (ev)=>{
+        try{
+          if(typeof localStorage !== 'undefined'){
+            const stored = localStorage.getItem(THEME_STORAGE_KEY);
+            if(stored === 'light' || stored === 'dark'){
+              return;
+            }
+          }
+        }catch(e){}
+        currentTheme = ev.matches ? 'light' : 'dark';
+        applyThemePreference(currentTheme);
+      };
+      if(mq.addEventListener){ mq.addEventListener('change', handler); }
+      else if(mq.addListener){ mq.addListener(handler); }
+    }
+  }catch(e){}
+})();
+if(themeToggleBtn){
+  themeToggleBtn.addEventListener('click', ()=>{
+    const isLightNow = document.body.classList.contains('theme-light');
+    const next = isLightNow ? 'dark' : 'light';
+    currentTheme = next;
+    applyThemePreference(next);
+    try{
+      if(typeof localStorage !== 'undefined'){
+        localStorage.setItem(THEME_STORAGE_KEY, next);
+      }
+    }catch(e){}
+  });
+}
 const setStatus = (t)=>{ statusEl.textContent = t; console.log('[状态]', t); };
 function loadScriptChain(urls, test, onOk, onFail){
   let i=0; (function next(){
