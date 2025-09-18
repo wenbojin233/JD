@@ -14,60 +14,100 @@
         <span class="hint">默认 Sheet：<b>same_result</b> · 先选择文件，再点“构建图谱”</span>
       </div>
       <div class="head-actions">
-        <span class="pill" id="status">初始化依赖中…</span>
-        <button type="button" id="toggleTheme" class="theme-toggle" aria-pressed="false">切换白天模式</button>
+        <div class="head-actions__top">
+          <span class="pill" id="status">初始化依赖中…</span>
+          <button type="button" id="toggleTheme" class="theme-toggle" aria-pressed="false">切换白天模式</button>
+        </div>
+        <div class="head-actions__bottom panel-buttons">
+          <button type="button" id="toggleGroupPanel" class="panel-toggle" aria-expanded="false" aria-controls="groupPanel">同品组列表</button>
+          <button type="button" id="toggleConfirmedPanel" class="panel-toggle" aria-expanded="false" aria-controls="confirmedPanel">已确认同品组</button>
+        </div>
       </div>
     </div>
-
     <div class="controls">
       <div class="card">
-        <div class="toolbar">
-          <div class="group">
-            <input type="file" id="file" accept=".xlsx,.xls,.csv"/>
-            <label for="sheet">Sheet</label>
-            <input id="sheet" type="text" value="same_result"/>
-            <button id="build" class="primary">构建图谱</button>
+        <div class="card-header">
+          <h3>数据载入与全局操作</h3>
+          <p class="card-subtitle">导入 Excel/CSV 并掌控全局布局与展开节奏</p>
+        </div>
+        <div class="toolbar-grid toolbar-grid--primary">
+          <div class="cell cell--file">
+            <div class="field field--file">
+              <label for="file">数据文件</label>
+              <input type="file" id="file" accept=".xlsx,.xls,.csv"/>
+            </div>
           </div>
-          <div class="divider"></div>
-          <div class="group">
-            <button id="collapseAll">收起全部</button>
-            <button id="explode">展开全部</button>
-            <button id="pause" disabled>暂停</button>
+          <div class="cell cell--sheet">
+            <div class="field field--sheet">
+              <label for="sheet">Sheet</label>
+              <div class="field-row">
+                <input id="sheet" type="text" value="same_result"/>
+                <button id="build" class="primary">构建图谱</button>
+              </div>
+            </div>
           </div>
-          <div class="divider"></div>
-          <div class="group">
-            <button id="reset">视图复位</button>
-            <button id="export">导出 PNG</button>
+          <div class="cell cell--actions">
+            <div class="button-group button-group--wide">
+              <button id="collapseAll">收起全部</button>
+              <button id="explode">展开全部</button>
+              <button id="pause" disabled>暂停</button>
+              <button id="reset">视图复位</button>
+              <button id="export">导出 PNG</button>
+            </div>
           </div>
         </div>
       </div>
-
       <div class="card">
-        <div class="toolbar">
-          <div class="group">
-            <label for="search">定位节点</label>
-            <input id="search" type="text" placeholder="请输入节点 ID，例如 1000001"/>
-            <button id="go">定位</button>
+        <div class="card-header">
+          <h3>定位检索与参数调整</h3>
+          <p class="card-subtitle">快速定位目标节点，并按需调节同品组展开策略</p>
+        </div>
+        <div class="toolbar-grid toolbar-grid--secondary">
+          <div class="cell cell--search">
+            <div class="field field--search">
+              <label for="search">定位节点</label>
+              <div class="input-inline">
+                <input id="search" type="text" placeholder="请输入节点 ID，例如 1000001"/>
+                <button id="go">定位</button>
+              </div>
+            </div>
           </div>
-          <div class="divider"></div>
-          <div class="group">
-            <label for="minGroup">最小组件规模</label>
-            <input id="minGroup" type="range" min="1" max="10" step="1" value="2"/>
-            <span id="minGroupLabel" class="hint">≥ 2</span>
-            <div class="divider" style="height:20px"></div>
-            <label for="speed">扩散强度</label>
-            <input id="speed" type="range" min="1" max="5" step="1" value="3"/>
-            <span id="speedLabel" class="hint">标准</span>
-            <div class="divider" style="height:20px"></div>
-            <label for="renderSpeed">展开速度</label>
-            <input id="renderSpeed" type="range" min="1" max="4" step="1" value="3"/>
-            <span id="renderSpeedLabel" class="hint">快速</span>
+          <div class="cell cell--slider cell--slider-min">
+            <div class="field field--slider">
+              <div class="field-label">
+                <label for="minGroup">最小组件规模</label>
+                <span id="minGroupLabel" class="hint">≥ 2</span>
+              </div>
+              <input id="minGroup" type="range" min="1" max="10" step="1" value="2"/>
+            </div>
+          </div>
+          <div class="cell cell--slider cell--slider-speed">
+            <div class="field field--slider">
+              <div class="field-label">
+                <label for="speed">扩散强度</label>
+                <span id="speedLabel" class="hint">标准</span>
+              </div>
+              <input id="speed" type="range" min="1" max="5" step="1" value="3"/>
+            </div>
+          </div>
+          <div class="cell cell--slider cell--slider-render">
+            <div class="field field--slider">
+              <div class="field-label">
+                <label for="renderSpeed">展开速度</label>
+                <span id="renderSpeedLabel" class="hint">快速</span>
+              </div>
+              <input id="renderSpeed" type="range" min="1" max="4" step="1" value="3"/>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="card" style="margin-top:12px">
+    <div class="card card--network">
+      <div class="card-header">
+        <h3>图谱视图</h3>
+        <p class="card-subtitle">查看节点关系，关注关键指标与处理进度</p>
+      </div>
       <div id="network"></div>
       <div class="footer">
         <div class="stats">
@@ -103,8 +143,6 @@
         </div>
       </div>
     </div>
-
-    <button type="button" id="toggleGroupPanel" class="group-panel-toggle" aria-expanded="false" aria-controls="groupPanel">同品组列表</button>
     <aside class="group-panel" id="groupPanel" aria-hidden="true">
       <div class="group-panel__inner">
         <div class="group-panel__header">
@@ -120,7 +158,6 @@
       </div>
     </aside>
 
-    <button type="button" id="toggleConfirmedPanel" class="confirmed-panel-toggle" aria-expanded="false" aria-controls="confirmedPanel">已确认同品组</button>
     <aside class="confirmed-panel" id="confirmedPanel" aria-hidden="true">
       <div class="confirmed-panel__inner">
         <div class="confirmed-panel__header">
@@ -137,7 +174,6 @@
     </aside>
 
   </div>
-
   <!-- 浮动节点信息框 -->
   <div id="tooltip">
     <div class="hdr" id="tipDrag">
@@ -153,7 +189,6 @@
       <div class="list" id="tipList"></div>
     </div>
   </div>
-
 <script src="SkuGene.js"></script>
 </body>
 </html>
