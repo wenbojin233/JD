@@ -185,6 +185,14 @@ function removeEdgeById(edgeId, {recordUndo=true}={}){
 }
 function undoLast(){
   const entry=undoStack.pop(); if(!entry) return;
+  for(const [cidKey, entries] of groupPruneRecords.entries()){
+    const idx = entries.indexOf(entry);
+    if(idx !== -1){
+      entries.splice(idx,1);
+      if(entries.length===0){ groupPruneRecords.delete(cidKey); }
+      break;
+    }
+  }
   hideTip();
   if(entry.type==='node'){
     const {node, edges=[], cid, cidsByEdge={}} = entry;
@@ -261,25 +269,172 @@ function autoPruneUnstableNodes(){
     if(typeof renderGroupList === 'function'){
       try{ renderGroupList(activeGroupCid); }catch(err){ console.warn('renderGroupList 更新失败', err); }
     }
+    groupPruneRecords.clear();
+    groupPruneInProgress.clear();
     setStatus(removed>0 ? `自动剔品完成，删除 ${removed} 个节点` : '自动剔品完成，无需删除');
   }catch(err){
     console.error('自动剔品异常', err);
     alert('自动剔品过程中出现错误：'+(err?.message || err));
+    groupPruneRecords.clear();
+    groupPruneInProgress.clear();
     setStatus('自动剔品失败');
   }finally{
+    groupPruneInProgress.clear();
     _autoPruneRunning = false;
   }
 }
 
-function buildAdjacencySnapshot(){
+const groupPruneRecords = new Map();
+const groupPruneInProgress = new Set();
+
+function isGroupPruned(cid){
+  const key = String(cid ?? '');
+  if(!key) return false;
+  const record = groupPruneRecords.get(key);
+  return Array.isArray(record) && record.length>0;
+}
+
+function ensureComponentNodesReady(cid, onReady, onFail){
+  const key = String(cid);
+  let attempts = 0;
+  const maxAttempts = 40;
+  let requested = false;
+  const tick = ()=>{
+    const st = expandedState.get(key);
+    const nodeCount = st?.nodes ? st.nodes.size : 0;
+    if(nodeCount>0){
+      onReady && onReady();
+      return;
+    }
+    if(!requested){
+      requested = true;
+      if(typeof expandComponent === 'function'){
+        expandComponent(key, 'full');
+      }
+    }
+    if(attempts++ >= maxAttempts){
+      const err = new Error('组件节点加载超时');
+      if(onFail) onFail(err); else console.warn(err.message);
+      return;
+    }
+    setTimeout(tick, 150);
+  };
+  tick();
+}
+
+function captureUndoEntryForNode(nid){
+  const ok = removeNode(nid, {recordUndo:true});
+  if(!ok) return null;
+  return undoStack.pop() || null;
+}
+
+function pruneComponentNodes(cid){
+  const key = String(cid);
+  const removedEntries = [];
+  let safety = 0;
+  while(true){
+    const { adjacency, order } = buildAdjacencySnapshot(id => componentIdOfNode(id) === key);
+    if(order.length === 0) break;
+    let removedInPass = false;
+    for(const nid of order){
+      const neighbors = Array.from(adjacency.get(nid) || []);
+      if(!isStableNeighborClique(neighbors, adjacency)){
+        const entry = captureUndoEntryForNode(nid);
+        if(entry){
+          removedEntries.push(entry);
+          removedInPass = true;
+        }
+        break;
+      }
+    }
+    if(!removedInPass) break;
+    if(++safety > 5000){
+      console.warn('pruneComponentNodes safety break', key);
+      break;
+    }
+  }
+  return removedEntries;
+}
+
+function recommendPruneForGroup(cid){
+  const key = String(cid);
+  return new Promise((resolve, reject)=>{
+    if(_autoPruneRunning){
+      reject(new Error('自动剔品正在执行，请稍后再试'));
+      return;
+    }
+    if(groupPruneInProgress.has(key)){
+      resolve(0);
+      return;
+    }
+    groupPruneInProgress.add(key);
+    setStatus(`组件 ${key} 剔品处理中...`);
+    ensureComponentNodesReady(key, ()=>{
+      try{
+        const removedEntries = pruneComponentNodes(key);
+        if(removedEntries.length>0){
+          groupPruneRecords.set(key, removedEntries);
+          setStatus(`组件 ${key} 剔品完成，删除 ${removedEntries.length} 个节点`);
+        }else{
+          groupPruneRecords.delete(key);
+          setStatus(`组件 ${key} 暂无需剔品`);
+        }
+        groupPruneInProgress.delete(key);
+        resolve(removedEntries.length);
+      }catch(err){
+        groupPruneInProgress.delete(key);
+        setStatus(`组件 ${key} 剔品失败`);
+        reject(err);
+      }
+    }, (err)=>{
+      groupPruneInProgress.delete(key);
+      setStatus(`组件 ${key} 剔品失败`);
+      reject(err || new Error('组件节点尚未加载完成'));
+    });
+  });
+}
+
+function undoPruneForGroup(cid){
+  const key = String(cid);
+  return new Promise((resolve, reject)=>{
+    const record = groupPruneRecords.get(key);
+    if(!record || !record.length){
+      setStatus(`组件 ${key} 暂无可撤销的剔品记录`);
+      resolve(0);
+      return;
+    }
+    try{
+      for(let i=record.length-1;i>=0;i--){
+        undoStack.push(record[i]);
+        undoLast();
+      }
+      groupPruneRecords.delete(key);
+      setStatus(`组件 ${key} 撤销剔品，恢复 ${record.length} 个节点`);
+      resolve(record.length);
+    }catch(err){
+      setStatus(`组件 ${key} 撤销剔品失败`);
+      reject(err);
+    }
+  });
+}
+
+function buildAdjacencySnapshot(filterFn){
   const adjacency = new Map();
+  const predicate = typeof filterFn === 'function' ? filterFn : null;
   const nodes = nodesDS?.get({ filter: item => item.id?.startsWith('N:') }) || [];
-  for(const node of nodes){ adjacency.set(node.id, new Set()); }
+  for(const node of nodes){
+    if(predicate && !predicate(node.id)) continue;
+    adjacency.set(node.id, new Set());
+  }
   const edges = edgesDS?.get({ filter: item => item.from?.startsWith('N:') && item.to?.startsWith('N:') }) || [];
   for(const edge of edges){
     const { from, to } = edge;
-    if(!adjacency.has(from)) adjacency.set(from, new Set());
-    if(!adjacency.has(to)) adjacency.set(to, new Set());
+    if(predicate){
+      if(!adjacency.has(from) || !adjacency.has(to)) continue;
+    }else{
+      if(!adjacency.has(from)) adjacency.set(from, new Set());
+      if(!adjacency.has(to)) adjacency.set(to, new Set());
+    }
     adjacency.get(from).add(to);
     adjacency.get(to).add(from);
   }
@@ -312,6 +467,8 @@ function resetAll(){
   closeGroupPanel();
   closeConfirmedPanel();
   confirmedGroups.clear();
+  groupPruneRecords.clear();
+  groupPruneInProgress.clear();
   renderGroupList();
   updateStats();
   updateLegends();

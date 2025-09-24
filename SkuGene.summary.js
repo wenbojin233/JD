@@ -184,7 +184,11 @@ function renderGroupList(preselect){
       const padded = displayIndex.toString().padStart(2,'0');
       const titleAttr = cidRaw ? ` title="组ID：${escapeHtml(cidRaw)}"` : '';
       const idInfo = cidRaw ? ` · ${escapeHtml(cidRaw)}` : '';
-      return `<div class="${klass}" data-cid="${cidRaw}"><div class="meta"><span class="tag">#${padded}</span><span>${metaRight}</span></div><div class="title"${titleAttr}>${label}${idInfo}</div><div class="group-actions"><button type="button" data-action="focus">定位</button><button type="button" data-action="expand">展开</button><button type="button" data-action="confirm" class="confirm">确认</button></div></div>`;
+      const pruned = typeof isGroupPruned === 'function' ? isGroupPruned(cidRaw) : false;
+      const pruneLabel = pruned ? '撤销剔品' : '剔品推荐';
+      const pruneClass = pruned ? 'prune prune--active' : 'prune';
+      const pruneAttr = ` data-pruned="${pruned ? 'true' : 'false'}"`;
+      return `<div class="${klass}" data-cid="${cidRaw}"><div class="meta"><span class="tag">#${padded}</span><span>${metaRight}</span></div><div class="title"${titleAttr}>${label}${idInfo}</div><div class="group-actions"><button type="button" data-action="focus">定位</button><button type="button" data-action="expand">展开</button><button type="button" data-action="prune" class="${pruneClass}"${pruneAttr}>${pruneLabel}</button><button type="button" data-action="confirm" class="confirm">确认</button></div></div>`;
     }).join('');
     groupListEl.innerHTML = rows;
   }else{
@@ -209,7 +213,11 @@ function renderConfirmedList(list, selectedKey){
     const padded = displayIndex.toString().padStart(2,'0');
     const titleAttr = cidRaw ? ` title="组ID：${escapeHtml(cidRaw)}"` : '';
     const idInfo = cidRaw ? ` · ${escapeHtml(cidRaw)}` : '';
-    return `<div class="${klass}" data-cid="${cidRaw}"><div class="meta"><span class="tag">#${padded}</span><span>${metaRight}</span></div><div class="title"${titleAttr}>${label}${idInfo}</div><div class="group-actions"><button type="button" data-action="focus">定位</button><button type="button" data-action="expand">展开</button><button type="button" data-action="undo" class="undo">撤销确认</button></div></div>`;
+    const pruned = typeof isGroupPruned === 'function' ? isGroupPruned(cidRaw) : false;
+    const pruneLabel = pruned ? '撤销剔品' : '剔品推荐';
+    const pruneClass = pruned ? 'prune prune--active' : 'prune';
+    const pruneAttr = ` data-pruned="${pruned ? 'true' : 'false'}"`;
+    return `<div class="${klass}" data-cid="${cidRaw}"><div class="meta"><span class="tag">#${padded}</span><span>${metaRight}</span></div><div class="title"${titleAttr}>${label}${idInfo}</div><div class="group-actions"><button type="button" data-action="focus">定位</button><button type="button" data-action="expand">展开</button><button type="button" data-action="prune" class="${pruneClass}"${pruneAttr}>${pruneLabel}</button><button type="button" data-action="undo" class="undo">撤销确认</button></div></div>`;
   }).join('');
   confirmedListEl.innerHTML = rows;
 }
@@ -254,6 +262,38 @@ function focusComponent(cid){
   }
 }
 
+async function handleGroupPruneAction(cid, button){
+  const cidKey = String(cid ?? '');
+  if(!cidKey) return;
+  if(typeof recommendPruneForGroup !== 'function' || typeof undoPruneForGroup !== 'function'){
+    alert('剔品推荐功能尚未就绪');
+    return;
+  }
+  setActiveGroup(cidKey);
+  const originalText = button?.textContent || '';
+  const pruned = typeof isGroupPruned === 'function' ? isGroupPruned(cidKey) : false;
+  if(button){
+    button.disabled = true;
+    button.textContent = pruned ? '撤销中…' : '处理中…';
+  }
+  try{
+    if(pruned){
+      await undoPruneForGroup(cidKey);
+    }else{
+      await recommendPruneForGroup(cidKey);
+    }
+  }catch(err){
+    console.error('group prune error', err);
+    alert(err?.message || '剔品操作失败');
+  }finally{
+    renderGroupList(activeGroupCid ?? cidKey);
+    if(button){
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+}
+
 if(groupListEl){
   groupListEl.addEventListener('click', (ev)=>{
     const origin = ev.target instanceof Element ? ev.target : ev.target?.parentElement || null;
@@ -267,6 +307,7 @@ if(groupListEl){
       const action = actionBtn.dataset.action;
       if(action === 'expand'){ expandComponent(cid); setActiveGroup(cid); }
       else if(action === 'focus'){ focusComponent(cid); setActiveGroup(cid); }
+      else if(action === 'prune'){ handleGroupPruneAction(cid, actionBtn); }
       else if(action === 'confirm'){ confirmGroup(cid); }
       ev.preventDefault();
       return;
@@ -288,6 +329,7 @@ if(confirmedListEl){
       const action = actionBtn.dataset.action;
       if(action === 'expand'){ expandComponent(cid); setActiveGroup(cid); }
       else if(action === 'focus'){ focusComponent(cid); setActiveGroup(cid); }
+      else if(action === 'prune'){ handleGroupPruneAction(cid, actionBtn); }
       else if(action === 'undo'){ undoConfirmGroup(cid); }
       ev.preventDefault();
       return;
