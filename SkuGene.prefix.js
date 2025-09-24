@@ -228,6 +228,80 @@ function exportPNG(){
   if(!network?.canvas?.frame) return; const canvas=network.canvas.frame.canvas; const url=canvas.toDataURL('image/png');
   const a=document.createElement('a'); a.href=url; a.download='同品关系图.png'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
+
+let _autoPruneRunning = false;
+
+function autoPruneUnstableNodes(){
+  if(_autoPruneRunning) return;
+  if(!nodesDS || !edgesDS){
+    alert('网络尚未初始化，无法执行自动剔品');
+    return;
+  }
+  _autoPruneRunning = true;
+  let removed = 0;
+  try{
+    setStatus('自动剔品处理中...');
+    while(true){
+      const { adjacency, order } = buildAdjacencySnapshot();
+      if(order.length === 0) break;
+      let removedInPass = false;
+      for(const nid of order){
+        if(!nodesDS.get(nid)) continue;
+        const neighbors = Array.from(adjacency.get(nid) || []);
+        if(!isStableNeighborClique(neighbors, adjacency)){
+          if(removeNode(nid, {recordUndo:true})){
+            removed++;
+            removedInPass = true;
+          }
+          break;
+        }
+      }
+      if(!removedInPass) break;
+    }
+    if(typeof renderGroupList === 'function'){
+      try{ renderGroupList(activeGroupCid); }catch(err){ console.warn('renderGroupList 更新失败', err); }
+    }
+    setStatus(removed>0 ? `自动剔品完成，删除 ${removed} 个节点` : '自动剔品完成，无需删除');
+  }catch(err){
+    console.error('自动剔品异常', err);
+    alert('自动剔品过程中出现错误：'+(err?.message || err));
+    setStatus('自动剔品失败');
+  }finally{
+    _autoPruneRunning = false;
+  }
+}
+
+function buildAdjacencySnapshot(){
+  const adjacency = new Map();
+  const nodes = nodesDS?.get({ filter: item => item.id?.startsWith('N:') }) || [];
+  for(const node of nodes){ adjacency.set(node.id, new Set()); }
+  const edges = edgesDS?.get({ filter: item => item.from?.startsWith('N:') && item.to?.startsWith('N:') }) || [];
+  for(const edge of edges){
+    const { from, to } = edge;
+    if(!adjacency.has(from)) adjacency.set(from, new Set());
+    if(!adjacency.has(to)) adjacency.set(to, new Set());
+    adjacency.get(from).add(to);
+    adjacency.get(to).add(from);
+  }
+  const order = Array.from(adjacency.keys()).sort((a,b)=>{
+    const diff = (adjacency.get(b)?.size||0) - (adjacency.get(a)?.size||0);
+    return diff !== 0 ? diff : a.localeCompare(b);
+  });
+  return { adjacency, order };
+}
+
+function isStableNeighborClique(neighbors, adjacency){
+  if(neighbors.length < 2) return true;
+  for(let i=0;i<neighbors.length;i++){
+    for(let j=i+1;j<neighbors.length;j++){
+      const other = neighbors[j];
+      const set = adjacency.get(neighbors[i]);
+      if(!set || !set.has(other)) return false;
+    }
+  }
+  return true;
+}
+
 function resetAll(){
   nodesDS?.clear?.(); edgesDS?.clear?.(); expandedState.clear(); firstBatchDoneForCid.clear(); fullSummary=null;
   DEGREE_CAP=0; DEGREE_MAX=0; GROUP_CAP=0; GROUP_MAX=0; GROUP_CAP_ALL=0; GROUP_CAP_NOSINGLES=0; EDGES_PER_COMP=new Map();

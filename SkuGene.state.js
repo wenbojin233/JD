@@ -105,6 +105,7 @@ document.getElementById('pause').addEventListener('click',()=>{
 });
 document.getElementById('reset').addEventListener('click',()=> network?.fit({animation:true}));
 document.getElementById('export').addEventListener('click', () => { if (typeof exportPNG === 'function') { exportPNG(); } });
+document.getElementById('autoPrune').addEventListener('click', () => { if (typeof autoPruneUnstableNodes === 'function') { autoPruneUnstableNodes(); } });
 document.getElementById('go').addEventListener('click', () => { if (typeof locateNode === 'function') { locateNode(); } });
 
 addEventListener('keydown',(ev)=>{
