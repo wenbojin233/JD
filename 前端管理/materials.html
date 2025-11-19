@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>物料池视图</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #FF6B6B;
+      --surface: rgba(255, 255, 255, 0.9);
+      --surface-strong: rgba(255, 255, 255, 0.96);
+      --text: #111827;
+      --text-muted: #6B7280;
+      --border: rgba(255, 255, 255, 0.45);
+      --gradient-bg: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 50%, #eff2f5 100%);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--gradient-bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+    }
+
+    .dashboard {
+      display: flex;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      width: 80px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(248,249,250,0.9) 100%);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+      border-right: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 0;
+      gap: 16px;
+    }
+
+    .sidebar-logo {
+      width: 48px;
+      height: 48px;
+      border-radius: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 18px;
+      color: #fff;
+      background: linear-gradient(135deg, #FF6B6B 0%, #E85555 100%);
+      box-shadow: 0 8px 24px rgba(255, 107, 107, 0.35);
+    }
+
+    .sidebar nav {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex: 1;
+      align-items: center;
+    }
+
+    .nav-item {
+      width: 32px;
+      height: 32px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      color: var(--text-muted);
+      background: rgba(243, 244, 246, 0.9);
+      border: 1px solid transparent;
+      transition: all 0.2s ease;
+    }
+
+    .nav-item.active {
+      color: #fff;
+      background: linear-gradient(135deg, #FF6B6B 0%, #E85555 100%);
+      box-shadow: 0 10px 30px rgba(232, 85, 85, 0.35);
+    }
+
+    .nav-item span {
+      line-height: 1;
+    }
+
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      backdrop-filter: blur(6px);
+    }
+
+    .topbar {
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(90deg, rgba(255,255,255,0.95) 0%, rgba(248,249,250,0.9) 100%);
+      box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .topbar-left,
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .icon-button {
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      border: none;
+      background: rgba(243, 244, 246, 0.6);
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+
+    .tech-button {
+      border: none;
+      border-radius: 14px;
+      padding: 10px 18px;
+      font-size: 14px;
+      color: #fff;
+      font-weight: 600;
+      background: linear-gradient(135deg, #FF6B6B 0%, #E85555 100%);
+      box-shadow: 0 10px 30px rgba(232, 85, 85, 0.35);
+    }
+
+    .pool-select {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    .pool-select select {
+      border: 1px solid rgba(255,255,255,0.4);
+      border-radius: 12px;
+      padding: 8px 14px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.85) 0%, rgba(248,249,250,0.75) 100%);
+      font-size: 13px;
+      color: var(--text);
+      appearance: none;
+    }
+
+    .content {
+      flex: 1;
+      padding: 32px;
+      overflow-y: auto;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 28px;
+      border-bottom: 1px solid rgba(229, 231, 235, 0.6);
+      margin-bottom: 28px;
+      font-size: 14px;
+    }
+
+    .tab {
+      display: inline-block;
+      padding-bottom: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+
+    .tab:visited {
+      color: var(--text-muted);
+    }
+
+    .tab:hover {
+      color: var(--primary);
+    }
+
+    .tab.active,
+    .tab.active:visited {
+      color: var(--primary);
+      border-bottom: 2px solid var(--primary);
+    }
+
+    .search-panel {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .search-inputs {
+      flex: 1 1 480px;
+      display: flex;
+      align-items: stretch;
+      border-radius: 999px;
+      padding: 10px 12px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(248,249,250,0.9) 100%);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.4), 0 8px 22px rgba(15,23,42,0.08);
+    }
+
+    .search-field {
+      flex: 1;
+      min-width: 150px;
+      display: flex;
+      flex-direction: column;
+      padding: 0 12px;
+      position: relative;
+    }
+
+    .search-field:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 1px;
+      background: rgba(15, 23, 42, 0.08);
+    }
+
+    .search-field label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .search-field input {
+      border: none;
+      background: transparent;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+      padding: 0;
+    }
+
+    .search-field input:focus {
+      outline: none;
+    }
+
+    .search-field input::placeholder {
+      color: rgba(17, 24, 39, 0.45);
+      font-weight: 400;
+    }
+
+    .search-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .search-btn {
+      border: none;
+      border-radius: 14px;
+      padding: 10px 22px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .search-btn.primary {
+      color: #fff;
+      background: linear-gradient(135deg, #FF6B6B 0%, #E85555 100%);
+      box-shadow: 0 10px 24px rgba(232, 85, 85, 0.3);
+    }
+
+    .search-btn.ghost {
+      color: var(--text-muted);
+      background: linear-gradient(135deg, rgba(243,244,246,0.95) 0%, rgba(229,231,235,0.75) 100%);
+      border: 1px solid rgba(229, 231, 235, 0.8);
+    }
+
+    .search-btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 22px;
+    }
+
+    .materials-grid {
+      grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+    }
+
+    .card {
+      background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(248,249,250,0.85) 50%, rgba(243,244,246,0.8) 100%);
+      border-radius: 24px;
+      border: 1px solid var(--border);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.1);
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      min-height: 190px;
+    }
+
+    .materials-card {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 190px;
+    }
+
+    .materials-card .card-actions {
+      margin-top: auto;
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .materials-card .card-button {
+      min-width: 150px;
+    }
+
+    .materials-footer {
+      margin-top: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .materials-footer .card-actions {
+      margin-top: 0;
+    }
+
+    .subtasks-count {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .card-subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .card-menu {
+      width: 28px;
+      height: 28px;
+      border-radius: 10px;
+      background: rgba(243,244,246,0.6);
+      color: var(--text-muted);
+      border: none;
+    }
+
+    .card-stats {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--text-muted);
+    }
+
+    .stat-value {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .stat-row.single {
+      justify-content: flex-start;
+      gap: 6px;
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .stat-row.single span {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .stat-row.dual {
+      gap: 24px;
+      color: var(--text-muted);
+      font-weight: 500;
+      flex-wrap: wrap;
+    }
+
+    .stat-row.dual span {
+      color: var(--text-muted);
+    }
+
+    .stat-row.dual span strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .progress-block {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .progress-note {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .progress-note .progress-value {
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 6px;
+      border-radius: 9999px;
+      background: linear-gradient(90deg, rgba(107,114,128,0.15) 0%, rgba(107,114,128,0.08) 100%);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #FF6B6B 0%, #E85555 100%);
+    }
+
+    .card-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 14px;
+      padding: 10px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .card-button.primary {
+      color: #3b82f6;
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.18) 0%, rgba(59, 130, 246, 0.1) 100%);
+      box-shadow: 0 8px 24px rgba(59, 130, 246, 0.15);
+    }
+
+    .card-button.secondary {
+      color: var(--text-muted);
+      background: linear-gradient(135deg, rgba(243,244,246,0.95) 0%, rgba(229,231,235,0.75) 100%);
+      border: 1px solid rgba(229, 231, 235, 0.8);
+    }
+
+    .card-button.danger {
+      color: #fff;
+      background: linear-gradient(135deg, #FF6B6B 0%, #E85555 100%);
+      box-shadow: 0 8px 24px rgba(232, 85, 85, 0.2);
+    }
+
+    .card-actions {
+      margin-top: auto;
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .card-button.primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 12px 32px rgba(59, 130, 246, 0.18);
+    }
+
+    .card-button.secondary:hover {
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+    }
+
+    .card-button.danger:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 12px 32px rgba(232, 85, 85, 0.28);
+    }
+
+    @media (max-width: 960px) {
+      .sidebar {
+        display: none;
+      }
+
+      .topbar {
+        padding: 14px 24px;
+      }
+
+      .content {
+        padding: 24px;
+      }
+
+      .card {
+        border-radius: 20px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      body {
+        height: auto;
+      }
+
+      .dashboard {
+        flex-direction: column;
+      }
+
+      .topbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 16px;
+      }
+
+      .topbar-left,
+      .topbar-right {
+        justify-content: space-between;
+      }
+
+      .tabs {
+        gap: 16px;
+      }
+
+      .search-panel {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .search-inputs {
+        flex-direction: column;
+        border-radius: 20px;
+        gap: 12px;
+      }
+
+      .search-field {
+        padding: 0;
+      }
+
+      .search-field:not(:last-child)::after {
+        display: none;
+      }
+
+      .search-actions {
+        width: 100%;
+        justify-content: flex-end;
+      }
+
+      .card-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <aside class="sidebar">
+      <div class="sidebar-logo">JD</div>
+      <nav>
+        <div class="nav-item active"><span>⌂</span></div>
+        <div class="nav-item"><span>▤</span></div>
+        <div class="nav-item"><span>⚙︎</span></div>
+        <div class="nav-item"><span>👥</span></div>
+        <div class="nav-item"><span>📝</span></div>
+        <div class="nav-item"><span>⚡</span></div>
+      </nav>
+      <div class="nav-item"><span>🙂</span></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-button">☰</button>
+          <div class="pool-select">
+            <span>当前物料池:</span>
+            <select>
+              <option>我的物料池</option>
+            </select>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <button class="icon-button">🔔</button>
+          <button class="tech-button">新增</button>
+          <button class="icon-button">⚙️</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="search-panel">
+          <div class="search-inputs">
+            <div class="search-field">
+              <label>任务ID</label>
+              <input type="text" placeholder="输入任务ID" />
+            </div>
+            <div class="search-field">
+              <label>任务名称</label>
+              <input type="text" placeholder="输入任务名称" />
+            </div>
+            <div class="search-field">
+              <label>任务类目</label>
+              <input type="text" placeholder="输入任务类目" />
+            </div>
+          </div>
+          <div class="search-actions">
+            <button class="search-btn primary">查询</button>
+            <button class="search-btn ghost">重置</button>
+          </div>
+        </div>
+        <div class="tabs">
+          <a class="tab" href="index.html">全部</a>
+          <a class="tab active" href="materials.html">物料池</a>
+          <a class="tab" href="tasks.html">任务</a>
+        </div>
+
+        <div class="card-grid materials-grid">
+          <article class="card materials-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">我的物料池-1</div>
+                <div class="card-subtitle">原材料</div>
+              </div>
+              <button class="card-menu">⋮</button>
+            </div>
+            <div class="card-stats">
+              <div class="stat-row">
+                <span>最后更新于</span>
+                <span class="stat-value">2024-12-20</span>
+              </div>
+              <div class="stat-row">
+                <span>消耗token数：</span>
+                <span class="stat-value">56,000</span>
+              </div>
+              <div class="stat-row dual">
+                <span>池内同品关系数：<strong>1,580</strong></span>
+                <span>池内同品组：<strong>1,120</strong></span>
+              </div>
+              <div class="stat-row single">
+                <span>共1,000个物料</span>
+              </div>
+              <div class="progress-block">
+                <div class="progress-note">
+                  <span>物料池内有任务处理中</span>
+                  <span class="progress-value">进度 68%</span>
+                </div>
+                <div class="progress-bar">
+                  <div class="progress-fill" style="width: 68%;"></div>
+                </div>
+              </div>
+            </div>
+            <div class="materials-footer">
+              <span class="subtasks-count">共12个子任务</span>
+              <div class="card-actions">
+                <button class="card-button secondary">物料池画布</button>
+                <button class="card-button danger">物料池子任务</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card materials-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">我的物料池-2</div>
+                <div class="card-subtitle">零部件</div>
+              </div>
+              <button class="card-menu">⋮</button>
+            </div>
+            <div class="card-stats">
+              <div class="stat-row">
+                <span>最后更新于</span>
+                <span class="stat-value">2024-12-18</span>
+              </div>
+              <div class="stat-row">
+                <span>消耗token数：</span>
+                <span class="stat-value">21,400</span>
+              </div>
+              <div class="stat-row dual">
+                <span>池内同品关系数：<strong>820</strong></span>
+                <span>池内同品组：<strong>640</strong></span>
+              </div>
+              <div class="stat-row single">
+                <span>共500个物料</span>
+              </div>
+              <div class="progress-block">
+                <div class="progress-note">
+                  <span>物料池内有任务处理中</span>
+                  <span class="progress-value">进度 42%</span>
+                </div>
+                <div class="progress-bar">
+                  <div class="progress-fill" style="width: 42%;"></div>
+                </div>
+              </div>
+            </div>
+            <div class="materials-footer">
+              <span class="subtasks-count">共8个子任务</span>
+              <div class="card-actions">
+                <button class="card-button secondary">物料池画布</button>
+                <button class="card-button danger">物料池子任务</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card materials-card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">我的物料池-3</div>
+                <div class="card-subtitle">半成品</div>
+              </div>
+              <button class="card-menu">⋮</button>
+            </div>
+            <div class="card-stats">
+              <div class="stat-row">
+                <span>最后更新于</span>
+                <span class="stat-value">2024-12-17</span>
+              </div>
+              <div class="stat-row">
+                <span>消耗token数：</span>
+                <span class="stat-value">9,600</span>
+              </div>
+              <div class="stat-row dual">
+                <span>池内同品关系数：<strong>340</strong></span>
+                <span>池内同品组：<strong>210</strong></span>
+              </div>
+              <div class="stat-row single">
+                <span>共200个物料</span>
+              </div>
+            </div>
+            <div class="materials-footer">
+              <span class="subtasks-count">共6个子任务</span>
+              <div class="card-actions">
+                <button class="card-button secondary">物料池画布</button>
+                <button class="card-button danger">物料池子任务</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

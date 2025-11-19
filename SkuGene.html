@@ -1,0 +1,569 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <title>同品关系可视化管理</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="SkuGene.css?v=20250217"/>
+</head>
+<body data-default-view="graph">
+  <div class="wrap">
+    <div class="head">
+      <div class="title">
+        <h2>同品关系可视化管理</h2>
+        <span class="hint">默认 Sheet：<b>same_result</b> · 先选择文件，再点"构建图谱"</span>
+      </div>
+      <div class="head-actions">
+        <div class="head-actions__top" style="display: flex; align-items: center; gap: 10px;">
+          <span class="pill" id="status">初始化依赖中… · 构建 v20250217</span>
+          <button type="button" id="toggleTheme" class="theme-toggle" aria-pressed="false">切换白天模式</button>
+          <button type="button" id="clockButton" class="theme-toggle" aria-pressed="false" style="padding: 6px;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="workspace">
+      <aside class="control-panel" id="controlPanel" aria-label="操作栏">
+        <div class="card card--control panel-card" id="graphControlPanel">
+          <section class="control-section control-section--load">
+            <div class="card-header">
+              <h3>数据载入与构建图谱</h3>
+              <p class="card-subtitle">导入 Excel/CSV 并一键构建图谱</p>
+            </div>
+            <div class="toolbar-grid toolbar-grid--load">
+              <div class="cell cell--file">
+                <div class="field field--file">
+                  <label for="file">数据文件</label>
+                  <input type="file" id="file" accept=".xlsx,.xls,.csv"/>
+                  <button id="build" class="primary">构建图谱</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section control-section--search">
+            <div class="card-header">
+              <h3>定位检索</h3>
+              <p class="card-subtitle">快速定位目标节点，联动图谱与表格</p>
+            </div>
+            <div class="toolbar-grid toolbar-grid--search">
+              <div class="cell cell--search">
+                <div class="field field--search">
+                  <label for="search">定位节点</label>
+                  <div class="input-inline">
+                    <input id="search" type="text" placeholder="输入节点 ID 或商品名称"/>
+                    <button id="go">定位</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section control-section--global">
+            <div class="card-header">
+              <h3>全局操作</h3>
+              <p class="card-subtitle">控制布局、导出图谱或触发剔品动作</p>
+            </div>
+            <div class="toolbar-grid toolbar-grid--single">
+              <div class="cell cell--actions">
+                <div class="button-group button-group--wide">
+                  <button id="explode">展开全部</button>
+                  <button id="reset">视图复位</button>
+                  <button id="export">导出 PNG</button>
+                  <button id="ultimatePrune">究极剔品</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section control-section--keepers">
+            <div class="card-header">
+              <h3>同品保留条件</h3>
+              <p class="card-subtitle">保持关键属性一致，避免误剔</p>
+            </div>
+            <div class="toolbar-grid toolbar-grid--single">
+              <div class="cell cell--actions">
+                <div class="button-group button-group--wide">
+                  <button type="button" class="keeper-btn" data-keeper="brand">品牌</button>
+                  <button type="button" class="keeper-btn" data-keeper="power">功率</button>
+                  <button type="button" class="keeper-btn" data-keeper="voltage">电压</button>
+                  <button type="button" class="keeper-btn" data-keeper="parentchild">父子</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section control-section--params">
+            <div class="card-header">
+              <h3>参数调整</h3>
+              <p class="card-subtitle">调节组件筛选与扩散/展开速度</p>
+            </div>
+            <div class="toolbar-grid toolbar-grid--parameters">
+              <div class="cell cell--slider cell--slider-min">
+                <div class="field field--slider">
+                  <div class="field-label">
+                    <label for="minGroup">最小组件规模</label>
+                    <span id="minGroupLabel" class="hint">≥ 2</span>
+                  </div>
+                  <input id="minGroup" type="range" min="1" max="10" step="1" value="2"/>
+                </div>
+              </div>
+              <div class="cell cell--slider cell--slider-speed">
+                <div class="field field--slider">
+                  <div class="field-label">
+                    <label for="speed">扩散强度</label>
+                    <span id="speedLabel" class="hint">标准</span>
+                  </div>
+                  <input id="speed" type="range" min="1" max="5" step="1" value="3"/>
+                </div>
+              </div>
+              <div class="cell cell--slider cell--slider-render">
+                  <div class="field field--slider">
+                    <div class="field-label">
+                      <label for="renderSpeed">展开速度</label>
+                      <span id="renderSpeedLabel" class="hint">快速</span>
+                    </div>
+                    <input id="renderSpeed" type="range" min="1" max="4" step="1" value="3"/>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="card card--control control-panel--merge panel-card" id="mergeControlPanel" aria-hidden="true" hidden>
+          <section class="control-section control-section--load">
+            <div class="card-header">
+              <h3>吞并视图管理</h3>
+              <p class="card-subtitle">刷新吞并链数据并保持与图谱一致</p>
+            </div>
+            <div class="toolbar-grid toolbar-grid--load">
+              <div class="cell cell--file">
+                <div class="field field--file">
+                  <label>同步吞并结果</label>
+                  <button id="mergeRefreshStats">刷新吞并视图</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section control-section--search">
+            <div class="card-header">
+              <h3>吞并节点定位</h3>
+              <p class="card-subtitle">输入节点 ID，在吞并图与表格中聚焦</p>
+            </div>
+            <div class="toolbar-grid toolbar-grid--search">
+              <div class="cell cell--search">
+                <div class="field field--search">
+                  <label for="mergeSearch">吞并节点</label>
+                  <div class="input-inline">
+                    <input id="mergeSearch" type="text" placeholder="输入节点 ID 或商品名称"/>
+                    <button id="mergeLocate">定位</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section control-section--global">
+            <div class="card-header">
+              <h3>聚品全局操作</h3>
+              <p class="card-subtitle">刷新链路、导出图像或切换视图</p>
+            </div>
+            <div class="toolbar-grid toolbar-grid--single">
+              <div class="cell cell--actions">
+                <div class="button-group button-group--wide">
+                  <button id="mergeExpandBtn">刷新吞并</button>
+                  <button id="mergeResetBtn">视图复位</button>
+                  <button id="mergeExportPng">导出 PNG</button>
+                  <button id="mergeGotoGraph">回到图谱</button>
+                  <button id="mergeCsvBtn">导出吞并CSV</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section control-section--params">
+            <div class="card-header card-header--with-action">
+              <div>
+                <h3>显示参数</h3>
+                <p class="card-subtitle">控制吞并视图的节点/关系数量与拖动范围</p>
+              </div>
+              <button type="button" id="mergeAiButton" class="primary primary--danger">AI 再聚品</button>
+            </div>
+            <div class="toolbar-grid toolbar-grid--parameters">
+              <div class="cell cell--slider">
+                <div class="field field--slider">
+                  <div class="field-label">
+                    <label for="mergeNodeLimit">节点上限</label>
+                    <span id="mergeNodeLimitLabel" class="hint">520</span>
+                  </div>
+                  <input id="mergeNodeLimit" type="range" min="120" max="1500" step="20" value="520"/>
+                </div>
+              </div>
+              <div class="cell cell--slider">
+                <div class="field field--slider">
+                  <div class="field-label">
+                    <label for="mergeEdgeLimit">关系上限</label>
+                    <span id="mergeEdgeLimitLabel" class="hint">720</span>
+                  </div>
+                  <input id="mergeEdgeLimit" type="range" min="120" max="1500" step="20" value="720"/>
+                </div>
+              </div>
+              <div class="cell cell--slider">
+                <div class="field field--slider">
+                  <div class="field-label">
+                    <label for="mergeDragLimit">拖动跟随节点</label>
+                    <span id="mergeDragLimitLabel" class="hint">360</span>
+                  </div>
+                  <input id="mergeDragLimit" type="range" min="60" max="800" step="20" value="360"/>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </aside>
+      <button type="button" id="controlToggle" class="control-toggle" aria-expanded="true" aria-controls="controlPanel" aria-label="收起操作栏">
+        <span class="control-toggle__icon" aria-hidden="true"></span>
+      </button>
+      <section class="canvas-panel">
+        <div class="card card--network">
+          <div class="canvas-split" id="canvasSplit">
+            <div class="canvas-split__pane canvas-split__pane--top" id="canvasSplitTop">
+              <div class="card-header card-header--tabs">
+                <div class="view-tabs-row">
+                  <div class="view-tabs" role="tablist">
+                    <button type="button" class="view-tab is-active" id="viewTabGraph" data-view-target="graph" aria-pressed="true" role="tab" aria-controls="graphViewPane">图谱视图</button>
+                    <button type="button" class="view-tab" id="viewTabMerge" data-view-target="merge" aria-pressed="false" role="tab" aria-controls="mergeViewPane">吞并视图</button>
+                  </div>
+                  <div class="view-stats view-stats--graph" id="graphStatsBar" aria-hidden="false">
+                    <div class="view-stat"><span>节点：</span><span class="view-stat__value" id="graphStatNodes">0</span></div>
+                    <div class="view-stat"><span>关系：</span><span class="view-stat__value" id="graphStatEdges">0</span></div>
+                    <div class="view-stat"><span>组件：</span><span class="view-stat__value" id="graphStatComponents">0</span></div>
+                    <div class="view-stat"><span>最大组件：</span><span class="view-stat__value" id="graphStatMaxGroup">0</span></div>
+                  </div>
+                  <div class="view-stats view-stats--merge" id="mergeStatsBar" aria-hidden="true">
+                    <div class="view-stat"><span>组件：</span><span class="view-stat__value" id="mergeStatComponents">0</span></div>
+                    <div class="view-stat"><span>吞并节点：</span><span class="view-stat__value" id="mergeStatVictims">0</span></div>
+                    <div class="view-stat"><span>关系：</span><span class="view-stat__value" id="mergeStatEdges">0</span></div>
+                    <div class="view-stat"><span>展示：</span><span class="view-stat__value" id="mergeStatNodes">0</span></div>
+                  </div>
+                </div>
+                <p class="card-subtitle">查看节点关系，关注关键指标与处理进度</p>
+              </div>
+              <div class="view-pane view-pane--graph is-active" id="graphViewPane" role="tabpanel" aria-labelledby="viewTabGraph">
+                <div id="network" class="network-canvas"></div>
+              </div>
+              <div class="view-pane view-pane--merge" id="mergeViewPane" role="tabpanel" aria-hidden="true" aria-labelledby="viewTabMerge" hidden>
+                <div id="mergeNetwork" class="network-canvas"></div>
+                <div class="merge-footer">
+                  <span class="hint" id="mergeHint">暂无吞并记录，执行“剔品推荐”后查看。</span>
+                </div>
+              </div>
+            </div>
+            <div class="canvas-split__handle" id="canvasSplitHandle" role="separator" aria-label="拖动调节画布与表格尺寸" aria-orientation="vertical"></div>
+            <div class="canvas-split__pane canvas-split__pane--bottom" id="canvasSplitBottom">
+              <div class="table-panes">
+                <div class="raw-table-card table-pane view-pane view-pane--graph is-active" id="graphTablePane" role="tabpanel" aria-labelledby="viewTabGraph">
+                  <div class="raw-table-header">
+                    <div>
+                      <h3>原始数据表</h3>
+                      <p class="card-subtitle">与已上传的 Excel / CSV 内容保持完全一致</p>
+                    </div>
+                    <span class="raw-table-meta" id="rawTableMeta">尚未加载</span>
+                  </div>
+                  <div class="raw-table-body">
+                    <div class="raw-table-placeholder" id="rawTablePlaceholder">暂无数据，请先导入 Excel 或 CSV 文件。</div>
+                    <div class="raw-table-scroll" id="rawTableScroll" hidden>
+                      <div class="raw-table-scroll-inner" id="rawTableScrollInner">
+                        <table class="raw-table" id="rawDataTable"></table>
+                      </div>
+                    </div>
+                    <div class="raw-table-foot" id="rawTableFoot" hidden aria-hidden="true">
+                      <div class="raw-table-hscroll" id="rawTableHScroll" aria-hidden="true">
+                        <button type="button" class="raw-table-scroll-btn raw-table-scroll-btn--prev" id="rawTableScrollLeft" aria-label="向左滚动表格" disabled>
+                          <span aria-hidden="true">&#x2039;</span>
+                        </button>
+                        <div class="raw-table-hscroll__scroller" id="rawTableHScrollScroller">
+                          <div class="raw-table-hscroll__spacer" id="rawTableHScrollSpacer"></div>
+                        </div>
+                        <button type="button" class="raw-table-scroll-btn raw-table-scroll-btn--next" id="rawTableScrollRight" aria-label="向右滚动表格" disabled>
+                          <span aria-hidden="true">&#x203A;</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="raw-table-card table-pane view-pane view-pane--merge" id="mergeTablePane" role="tabpanel" aria-labelledby="viewTabMerge" aria-hidden="true" hidden>
+                  <div class="raw-table-header">
+                    <div>
+                      <h3>吞并视图表格</h3>
+                      <p class="card-subtitle">展示吞并剔品产生的数据，随究极剔品实时更新</p>
+                    </div>
+                    <span class="raw-table-meta" id="mergeTableMeta">暂无吞并数据</span>
+                  </div>
+                  <div class="raw-table-body">
+                    <div class="raw-table-placeholder" id="mergeTablePlaceholder">暂无吞并数据，执行“究极剔品”后查看。</div>
+                    <div class="raw-table-scroll" id="mergeTableScroll" hidden>
+                      <div class="raw-table-scroll-inner" id="mergeTableScrollInner">
+                        <table class="raw-table" id="mergeDataTable"></table>
+                      </div>
+                    </div>
+                    <div class="raw-table-foot" id="mergeTableFoot" hidden aria-hidden="true">
+                      <div class="raw-table-hscroll" id="mergeTableHScroll" aria-hidden="true">
+                        <button type="button" class="raw-table-scroll-btn raw-table-scroll-btn--prev" id="mergeTableScrollLeft" aria-label="向左滚动表格" disabled>
+                          <span aria-hidden="true">&#x2039;</span>
+                        </button>
+                        <div class="raw-table-hscroll__scroller" id="mergeTableHScrollScroller">
+                          <div class="raw-table-hscroll__spacer" id="mergeTableHScrollSpacer"></div>
+                        </div>
+                        <button type="button" class="raw-table-scroll-btn raw-table-scroll-btn--next" id="mergeTableScrollRight" aria-label="向右滚动表格" disabled>
+                          <span aria-hidden="true">&#x203A;</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <aside class="prune-detail-panel" id="pruneDetailPanel" aria-hidden="true">
+      <div class="prune-detail-panel__inner">
+        <div class="prune-detail-panel__header">
+          <h3>剔品详情</h3>
+          <div class="prune-detail-panel__tools">
+            <span id="pruneDetailCount" class="hint">0 个节点</span>
+            <button type="button" id="closePruneDetail" class="prune-detail-close" aria-label="关闭剔品详情">✕</button>
+          </div>
+        </div>
+        <div id="pruneDetailList" class="prune-detail-list">
+          <div class="placeholder hint">暂无剔品记录。</div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+  <!-- 浮动节点信息框 -->
+  <div id="tooltip">
+    <div class="hdr" id="tipDrag">
+      <h4 id="tipTitle">—</h4>
+      <button class="close" onclick="hideTip()">关闭</button>
+    </div>
+    <div class="body">
+      <div class="meta" id="tipMeta"></div>
+      <div class="actions" id="tipActions">
+        <button id="toggleReason" class="toggle">显示同品原因</button>
+        <button id="autoPruneNode" class="secondary">究极剔品</button>
+        <button id="deleteNode" class="danger">删除该节点</button>
+      </div>
+      <div class="list" id="tipList"></div>
+    </div>
+  </div>
+
+  <!-- 历史版本控制弹窗 -->
+  <div id="clockModal" class="modal-overlay" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="clockModalTitle" style="position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000;">
+    <div class="modal-content card" style="background: var(--surface, #fff); color: inherit; width: min(680px, 92vw); max-height: 80vh; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.2); overflow: hidden;">
+      <div class="card-header card-header--with-action" style="display:flex; justify-content: space-between; align-items:center; padding: 16px 20px; border-bottom: 1px solid rgba(0,0,0,.08);">
+        <div>
+          <h3 id="clockModalTitle">历史版本控制</h3>
+          <p class="card-subtitle">当前时间：<span id="currentTime">--:--:--</span></p>
+        </div>
+        <button type="button" class="modal-close prune-detail-close" aria-label="关闭弹窗">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 16px 20px;">
+        <div class="toolbar-grid toolbar-grid--single" style="margin-bottom: 12px;">
+          <div class="button-group">
+            <button id="versionRefresh">刷新</button>
+            <button id="versionExport" class="secondary">导出</button>
+            <button id="versionImport" class="secondary">导入</button>
+            <button id="versionClear" class="danger">清空本地版本</button>
+          </div>
+        </div>
+        <div id="versionList" class="raw-table-scroll" style="max-height: 50vh; overflow: auto;">
+          <div class="raw-table-placeholder" id="versionEmpty">暂无历史版本。</div>
+          <ul id="versionItems" style="list-style: none; margin:0; padding:0;"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+<script>
+  // 历史版本弹窗与本地版本管理
+  let clockInterval = null;
+  const STORAGE_KEY = 'skuGeneVersions';
+
+  function showClockModal() {
+    const modal = document.getElementById('clockModal');
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    updateClock();
+    renderVersions();
+    // 每秒更新一次时间
+    if (clockInterval) clearInterval(clockInterval);
+    clockInterval = setInterval(updateClock, 1000);
+  }
+
+  function closeClockModal() {
+    const modal = document.getElementById('clockModal');
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    if (clockInterval) {
+      clearInterval(clockInterval);
+      clockInterval = null;
+    }
+  }
+
+  function updateClock() {
+    const now = new Date();
+    const timeString = now.toLocaleTimeString('zh-CN', { hour12: false });
+    const el = document.getElementById('currentTime');
+    if (el) el.textContent = timeString;
+  }
+
+  function getVersions() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      console.warn('读取本地版本失败', e);
+      return [];
+    }
+  }
+
+  function saveVersions(arr) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+    } catch (e) {
+      console.warn('保存本地版本失败', e);
+    }
+  }
+
+  function renderVersions() {
+    const listEl = document.getElementById('versionItems');
+    const emptyEl = document.getElementById('versionEmpty');
+    if (!listEl) return;
+    const versions = getVersions();
+    listEl.innerHTML = '';
+    if (!versions.length) {
+      if (emptyEl) emptyEl.hidden = false;
+      return;
+    }
+    if (emptyEl) emptyEl.hidden = true;
+    versions
+      .slice()
+      .reverse()
+      .forEach((v, idx) => {
+        const li = document.createElement('li');
+        li.style.padding = '10px 0';
+        li.style.borderBottom = '1px solid rgba(0,0,0,.06)';
+        const ts = v.timestamp ? new Date(v.timestamp) : null;
+        const title = v.name || (ts ? ts.toLocaleString('zh-CN') : `版本 #${idx + 1}`);
+        li.innerHTML = `
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+            <div>
+              <div style="font-weight:600;">${title}</div>
+              <div class="hint" style="font-size:12px;">${v.desc || '—'}${ts ? ' · ' + ts.toLocaleString('zh-CN') : ''}</div>
+            </div>
+            <div class="button-group">
+              <button class="version-restore">恢复</button>
+              <button class="version-compare secondary">对比上一个</button>
+              <button class="version-delete danger">删除</button>
+            </div>
+          </div>
+        `;
+        // 按钮事件（示例占位，后续可对接真实业务）
+        li.querySelector('.version-restore').addEventListener('click', () => {
+          console.log('恢复版本', v);
+          alert('已触发“恢复版本”动作（示例）。如需接入实际数据流，请告诉我。');
+          closeClockModal();
+        });
+        li.querySelector('.version-compare').addEventListener('click', () => {
+          console.log('对比版本', v);
+          alert('已触发“对比上一个”动作（示例）。');
+        });
+        li.querySelector('.version-delete').addEventListener('click', () => {
+          const all = getVersions();
+          const idxInAll = all.findIndex(x => x.id === v.id);
+          if (idxInAll >= 0) {
+            all.splice(idxInAll, 1);
+            saveVersions(all);
+            renderVersions();
+          }
+        });
+        listEl.appendChild(li);
+      });
+  }
+
+  // 工具按钮事件
+  document.getElementById('versionRefresh')?.addEventListener('click', renderVersions);
+  document.getElementById('versionExport')?.addEventListener('click', () => {
+    const data = getVersions();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sku-gene-versions.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+  document.getElementById('versionImport')?.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json';
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const imported = JSON.parse(String(reader.result || '[]'));
+          if (!Array.isArray(imported)) {
+            alert('导入失败：JSON 格式不正确（需为数组）');
+            return;
+          }
+          saveVersions(imported);
+          renderVersions();
+        } catch (e) {
+          alert('导入失败：无法解析 JSON');
+        }
+      };
+      reader.readAsText(file, 'utf-8');
+    };
+    input.click();
+  });
+  document.getElementById('versionClear')?.addEventListener('click', () => {
+    if (confirm('确认清空本地历史版本？此操作不可恢复')) {
+      saveVersions([]);
+      renderVersions();
+    }
+  });
+
+  // 打开/关闭 & 无障碍交互
+  document.getElementById('clockButton')?.addEventListener('click', showClockModal);
+  document.querySelector('.modal-close')?.addEventListener('click', closeClockModal);
+  // 点击遮罩关闭
+  document.getElementById('clockModal')?.addEventListener('click', (e) => {
+    if (e.target === document.getElementById('clockModal')) {
+      closeClockModal();
+    }
+  });
+  // ESC 关闭
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeClockModal();
+  });
+</script>
+<script src="SkuGene.dom.js?v=20250217"></script>
+<script src="SkuGene.worker.js?v=20250217"></script>
+<script src="SkuGene.state.js?v=20250217"></script>
+<script src="SkuGene.summary.js?v=20250217"></script>
+<script src="SkuGene.prefix.js?v=20250217"></script>
+<script src="SkuGene.tooltip.js?v=20250217"></script>
+</body>
+</html>
