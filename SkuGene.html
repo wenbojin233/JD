@@ -17,15 +17,19 @@
         <span class="hint">默认 Sheet：<b>same_result</b> · 先选择文件，再点"构建图谱"</span>
       </div>
       <div class="head-actions">
-        <div class="head-actions__top" style="display: flex; align-items: center; gap: 10px;">
+        <div class="head-actions__top">
           <span class="pill" id="status">初始化依赖中… · 构建 v20250217</span>
           <button type="button" id="toggleTheme" class="theme-toggle" aria-pressed="false">切换白天模式</button>
-          <button type="button" id="clockButton" class="theme-toggle" aria-pressed="false" style="padding: 6px;">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
-          </button>
+          <div class="history-toggle-wrapper">
+            <button type="button" id="historyToggle" class="history-toggle" aria-expanded="false" aria-controls="historyPanel" aria-label="查看历史版本">
+              <span class="history-toggle__icon" aria-hidden="true"></span>
+            </button>
+            <div class="history-panel" id="historyPanel" hidden>
+              <div class="history-panel__body" id="historyList">
+                <div class="history-panel__empty">暂无版本记录</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -194,7 +198,10 @@
                 <h3>显示参数</h3>
                 <p class="card-subtitle">控制吞并视图的节点/关系数量与拖动范围</p>
               </div>
-              <button type="button" id="mergeAiButton" class="primary primary--danger">AI 再聚品</button>
+              <button type="button" id="mergeAiButton" class="primary primary--danger ai-button">
+                <span class="ai-button__badge" aria-hidden="true">AI</span>
+                <span class="ai-button__text">AI 一键聚品</span>
+              </button>
             </div>
             <div class="toolbar-grid toolbar-grid--parameters">
               <div class="cell cell--slider">
@@ -367,198 +374,6 @@
       <div class="list" id="tipList"></div>
     </div>
   </div>
-
-  <!-- 历史版本控制弹窗 -->
-  <div id="clockModal" class="modal-overlay" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="clockModalTitle" style="position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000;">
-    <div class="modal-content card" style="background: var(--surface, #fff); color: inherit; width: min(680px, 92vw); max-height: 80vh; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.2); overflow: hidden;">
-      <div class="card-header card-header--with-action" style="display:flex; justify-content: space-between; align-items:center; padding: 16px 20px; border-bottom: 1px solid rgba(0,0,0,.08);">
-        <div>
-          <h3 id="clockModalTitle">历史版本控制</h3>
-          <p class="card-subtitle">当前时间：<span id="currentTime">--:--:--</span></p>
-        </div>
-        <button type="button" class="modal-close prune-detail-close" aria-label="关闭弹窗">✕</button>
-      </div>
-      <div class="modal-body" style="padding: 16px 20px;">
-        <div class="toolbar-grid toolbar-grid--single" style="margin-bottom: 12px;">
-          <div class="button-group">
-            <button id="versionRefresh">刷新</button>
-            <button id="versionExport" class="secondary">导出</button>
-            <button id="versionImport" class="secondary">导入</button>
-            <button id="versionClear" class="danger">清空本地版本</button>
-          </div>
-        </div>
-        <div id="versionList" class="raw-table-scroll" style="max-height: 50vh; overflow: auto;">
-          <div class="raw-table-placeholder" id="versionEmpty">暂无历史版本。</div>
-          <ul id="versionItems" style="list-style: none; margin:0; padding:0;"></ul>
-        </div>
-      </div>
-    </div>
-  </div>
-<script>
-  // 历史版本弹窗与本地版本管理
-  let clockInterval = null;
-  const STORAGE_KEY = 'skuGeneVersions';
-
-  function showClockModal() {
-    const modal = document.getElementById('clockModal');
-    modal.hidden = false;
-    modal.setAttribute('aria-hidden', 'false');
-    updateClock();
-    renderVersions();
-    // 每秒更新一次时间
-    if (clockInterval) clearInterval(clockInterval);
-    clockInterval = setInterval(updateClock, 1000);
-  }
-
-  function closeClockModal() {
-    const modal = document.getElementById('clockModal');
-    modal.hidden = true;
-    modal.setAttribute('aria-hidden', 'true');
-    if (clockInterval) {
-      clearInterval(clockInterval);
-      clockInterval = null;
-    }
-  }
-
-  function updateClock() {
-    const now = new Date();
-    const timeString = now.toLocaleTimeString('zh-CN', { hour12: false });
-    const el = document.getElementById('currentTime');
-    if (el) el.textContent = timeString;
-  }
-
-  function getVersions() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch (e) {
-      console.warn('读取本地版本失败', e);
-      return [];
-    }
-  }
-
-  function saveVersions(arr) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
-    } catch (e) {
-      console.warn('保存本地版本失败', e);
-    }
-  }
-
-  function renderVersions() {
-    const listEl = document.getElementById('versionItems');
-    const emptyEl = document.getElementById('versionEmpty');
-    if (!listEl) return;
-    const versions = getVersions();
-    listEl.innerHTML = '';
-    if (!versions.length) {
-      if (emptyEl) emptyEl.hidden = false;
-      return;
-    }
-    if (emptyEl) emptyEl.hidden = true;
-    versions
-      .slice()
-      .reverse()
-      .forEach((v, idx) => {
-        const li = document.createElement('li');
-        li.style.padding = '10px 0';
-        li.style.borderBottom = '1px solid rgba(0,0,0,.06)';
-        const ts = v.timestamp ? new Date(v.timestamp) : null;
-        const title = v.name || (ts ? ts.toLocaleString('zh-CN') : `版本 #${idx + 1}`);
-        li.innerHTML = `
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-            <div>
-              <div style="font-weight:600;">${title}</div>
-              <div class="hint" style="font-size:12px;">${v.desc || '—'}${ts ? ' · ' + ts.toLocaleString('zh-CN') : ''}</div>
-            </div>
-            <div class="button-group">
-              <button class="version-restore">恢复</button>
-              <button class="version-compare secondary">对比上一个</button>
-              <button class="version-delete danger">删除</button>
-            </div>
-          </div>
-        `;
-        // 按钮事件（示例占位，后续可对接真实业务）
-        li.querySelector('.version-restore').addEventListener('click', () => {
-          console.log('恢复版本', v);
-          alert('已触发“恢复版本”动作（示例）。如需接入实际数据流，请告诉我。');
-          closeClockModal();
-        });
-        li.querySelector('.version-compare').addEventListener('click', () => {
-          console.log('对比版本', v);
-          alert('已触发“对比上一个”动作（示例）。');
-        });
-        li.querySelector('.version-delete').addEventListener('click', () => {
-          const all = getVersions();
-          const idxInAll = all.findIndex(x => x.id === v.id);
-          if (idxInAll >= 0) {
-            all.splice(idxInAll, 1);
-            saveVersions(all);
-            renderVersions();
-          }
-        });
-        listEl.appendChild(li);
-      });
-  }
-
-  // 工具按钮事件
-  document.getElementById('versionRefresh')?.addEventListener('click', renderVersions);
-  document.getElementById('versionExport')?.addEventListener('click', () => {
-    const data = getVersions();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'sku-gene-versions.json';
-    a.click();
-    URL.revokeObjectURL(url);
-  });
-  document.getElementById('versionImport')?.addEventListener('click', () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json';
-    input.onchange = () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          const imported = JSON.parse(String(reader.result || '[]'));
-          if (!Array.isArray(imported)) {
-            alert('导入失败：JSON 格式不正确（需为数组）');
-            return;
-          }
-          saveVersions(imported);
-          renderVersions();
-        } catch (e) {
-          alert('导入失败：无法解析 JSON');
-        }
-      };
-      reader.readAsText(file, 'utf-8');
-    };
-    input.click();
-  });
-  document.getElementById('versionClear')?.addEventListener('click', () => {
-    if (confirm('确认清空本地历史版本？此操作不可恢复')) {
-      saveVersions([]);
-      renderVersions();
-    }
-  });
-
-  // 打开/关闭 & 无障碍交互
-  document.getElementById('clockButton')?.addEventListener('click', showClockModal);
-  document.querySelector('.modal-close')?.addEventListener('click', closeClockModal);
-  // 点击遮罩关闭
-  document.getElementById('clockModal')?.addEventListener('click', (e) => {
-    if (e.target === document.getElementById('clockModal')) {
-      closeClockModal();
-    }
-  });
-  // ESC 关闭
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeClockModal();
-  });
-</script>
 <script src="SkuGene.dom.js?v=20250217"></script>
 <script src="SkuGene.worker.js?v=20250217"></script>
 <script src="SkuGene.state.js?v=20250217"></script>

@@ -54,12 +54,13 @@ const tablePrimaryCollapseState={
   merge:new Map()
 };
 const GRAPH_GROUP_COLOR_CLASSES=['merge-group--a','merge-group--b','merge-group--c','merge-group--d','merge-group--e'];
-const MERGE_TABLE_COLUMN_DEFS=[
-  { key:'seq', label:'剔品组' },
-  { key:'keepCode', label:'建议保留 · 商品编码' },
-  { key:'keepName', label:'建议保留 · 商品名称' },
-  { key:'dropCode', label:'建议剔除 · 商品编码' },
-  { key:'dropName', label:'建议剔除 · 商品名称' }
+const MERGE_TABLE_COLUMNS=[
+  { key:'seq', label:'同品组序号' },
+  { key:'code', label:'商品编码' },
+  { key:'name', label:'商品名称' },
+  { key:'recommend', label:'剔品推荐' },
+  { key:'reason', label:'剔品理由' },
+  { key:'primary', label:'当前归属主品编码' }
 ];
 let groupToggleListenerBound=false;
 if(typeof document!=='undefined'){
@@ -1465,11 +1466,11 @@ function renderMergeTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
   placeholder.hidden=true;
   placeholder.setAttribute('aria-hidden','true');
   scrollWrapper.hidden=false;
-  const columnConfig=buildTableColumnOrder(rows, { includeScore:false });
-  const { columnOrder, columnCount, pillColumnIndex } = columnConfig;
+  const columnOrder=MERGE_TABLE_COLUMNS;
+  const columnCount=columnOrder.length;
   const headCells=columnOrder.map(col=> `<th scope="col">${escapeRawCell(col.label)}</th>`);
-  const colgroupMarkup = buildGraphColumnRules(columnCount,{ scoreIndex:-1, pillIndex:pillColumnIndex });
-  const buildDisplayCells=(row)=> mapCellsToColumnOrder(row.cells, columnOrder);
+  const colgroupMarkup = buildMergeColumnRules(columnOrder);
+  const reasonIndex=findReasonColumnIndex();
   const groups=buildMergeGroups(rows);
   if(!groups.length){
     const colgroup = colgroupMarkup ? `<colgroup>${colgroupMarkup}</colgroup>` : '';
@@ -1487,25 +1488,29 @@ function renderMergeTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
     const groupLabel = group.centerLabel || group.centerCode || '未指定中心';
     const dataKey=`merge:${group.key}`;
     const collapsed=tableGroupCollapseState.merge.get(dataKey);
-    const headerRow=`<tr class="merge-group__header merge-group__header-row ${colorClass}"><td colspan="${columnCount}"><div class="group-header"><button type="button" class="group-toggle" data-table="merge" data-group="${escapeAttr(dataKey)}" aria-expanded="${collapsed? 'false':'true'}" aria-label="切换同品组"><span class="group-toggle__icon"></span></button><span>剔品组 ${idx+1} · 中心节点：${escapeRawCell(groupLabel)}${group.cid ? ` · 组件 ${escapeRawCell(group.cid)}`:''}</span></div></td></tr>`;
-    const centerRow = generateMergeRow({
+    const seq=idx+1;
+    const headerRow=`<tr class="merge-group__header merge-group__header-row ${colorClass}"><td colspan="${columnCount}"><div class="group-header"><button type="button" class="group-toggle" data-table="merge" data-group="${escapeAttr(dataKey)}" aria-expanded="${collapsed? 'false':'true'}" aria-label="切换聚品组"><span class="group-toggle__icon"></span></button><span>聚品组 ${seq} · 中心节点：${escapeRawCell(groupLabel)}${group.cid ? ` · 组件 ${escapeRawCell(group.cid)}`:''}</span></div></td></tr>`;
+    const centerRow = renderMergeDataRow({
       columnCount,
+      groupSeq:seq,
       entry:group.centerEntry,
       fallbackCode:group.centerCode,
-      fallbackLabel:group.centerLabel,
-      colorClass:`merge-group__center ${colorClass}`,
-      emptyText:'暂无中心节点数据',
-      pillIndex:pillColumnIndex,
-      displayCells:group.centerEntry? buildDisplayCells(group.centerEntry) : null
+      fallbackName:group.centerLabel,
+      recommendation:'建议保留',
+      reasonIndex,
+      primaryCode:group.centerCode,
+      colorClass:`merge-group__center ${colorClass}`
     });
     const victimRows = group.victims.length
-      ? group.victims.map(victim=> generateMergeRow({
+      ? group.victims.map(victim=> renderMergeDataRow({
           columnCount,
+          groupSeq:seq,
           entry:victim,
           fallbackCode:victim.code,
-          colorClass:`merge-group__victim ${colorClass}`,
-          pillIndex:pillColumnIndex,
-          displayCells:buildDisplayCells(victim)
+          recommendation:'建议剔除',
+          reasonIndex,
+          primaryCode:normalizeCode(victim.meta?.mergerCode)||group.centerCode,
+          colorClass:`merge-group__victim ${colorClass}`
         })).join('')
       : `<tr class="merge-group__empty ${colorClass}"><td colspan="${columnCount}">暂无被吞节点</td></tr>`;
     return `<tbody class="merge-group ${colorClass}${collapsed? ' is-collapsed':''}" data-group="${escapeAttr(dataKey)}" data-table="merge">${headerRow}${centerRow}${victimRows}</tbody>`;
@@ -1530,12 +1535,11 @@ function renderMergeTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
     }
   });
   ctx.activeRow=null;
-  meta.textContent = `共 ${groups.length} 个吞并组 · ${rows.length} 个被吞节点`;
+  meta.textContent = `共 ${groups.length} 个聚品组 · ${rows.length} 个被吞节点`;
   ensureTableScrollSync(ctx);
   scheduleTableScrollbarUpdate(ctx);
   updateScrollButtonsState(ctx);
   bindGroupCollapseControls();
-  setupPrimaryRowToggles(ctx);
 }
 
 function buildMergeGroups(rows){
@@ -1571,6 +1575,70 @@ function buildMergeGroups(rows){
     }
   });
   return Array.from(groups.values()).sort((a,b)=> (a.centerCode||'').localeCompare(b.centerCode||''));
+}
+
+function buildMergeColumnRules(columns){
+  if(!Array.isArray(columns) || !columns.length) return '';
+  return columns.map(col=>{
+    const classNames=[];
+    if(col.key==='name'){
+      classNames.push('col-name');
+    }
+    const classAttr=classNames.length? ` class="${classNames.join(' ')}"` : '';
+    return `<col${classAttr}>`;
+  }).join('');
+}
+
+function renderMergeDataRow({ columnCount, groupSeq, entry, fallbackCode, fallbackName, recommendation, reasonIndex=-1, primaryCode, colorClass }){
+  const code = entry?.code || fallbackCode || '';
+  const name = getEntryDisplayName(entry, fallbackName || code);
+  const reasonCell = getEntryReasonCell(entry, reasonIndex);
+  const primary = primaryCode || entry?.meta?.closestPrimaryCode || code;
+  const cells=[
+    groupSeq ?? '',
+    code,
+    name,
+    recommendation || '',
+    reasonCell ?? '',
+    primary || ''
+  ];
+  const attrs=buildMergeRowAttributes(entry, code, primary);
+  return `<tr class="raw-table-row ${colorClass||''}"${attrs}>${renderTableCells(cells, columnCount, { scoreIndex:-1, pillIndex:-1, row:entry, nameIndex:2 })}</tr>`;
+}
+
+function buildMergeRowAttributes(entry, code, primary){
+  if(entry){
+    return buildRowDataAttributes(entry);
+  }
+  const attrs=[];
+  if(code){ attrs.push(`data-code="${escapeAttr(code)}"`); }
+  if(primary){ attrs.push(`data-primary-code="${escapeAttr(primary)}"`); }
+  return attrs.length? ' '+attrs.join(' ') : '';
+}
+
+function getEntryDisplayName(entry, fallback=''){
+  const preferred = entry?.meta?.displayName;
+  if(preferred && String(preferred).trim()){
+    return String(preferred).trim();
+  }
+  const idx=Number.isInteger(rawTableNameIndex)? rawTableNameIndex : -1;
+  if(idx>=0 && Array.isArray(entry?.cells)){
+    const cell=entry.cells[idx];
+    if(cell!==undefined && cell!==null){
+      const text=String(cell).trim();
+      if(text) return text;
+    }
+  }
+  if(fallback) return fallback;
+  if(entry?.rawCode) return String(entry.rawCode);
+  if(entry?.code) return String(entry.code);
+  return '';
+}
+
+function getEntryReasonCell(entry, reasonIndex){
+  if(!entry || !Array.isArray(entry.cells)) return '';
+  if(!Number.isInteger(reasonIndex) || reasonIndex<0) return '';
+  return entry.cells[reasonIndex];
 }
 
 function buildGraphComponentGroupList(rows){
@@ -1647,16 +1715,6 @@ function lookupComponentIdForCode(code){
     }
   }catch(err){ /* ignore */ }
   return null;
-}
-
-function generateMergeRow({ columnCount, entry, fallbackCode, fallbackLabel, colorClass, emptyText='暂无数据', pillIndex=-1, displayCells=null }){
-  if(entry && Array.isArray(displayCells)){
-    const attrs = buildRowDataAttributes(entry);
-    return `<tr class="raw-table-row ${colorClass||''}"${attrs}>${renderTableCells(displayCells, columnCount, { scoreIndex:-1, pillIndex, row:entry })}</tr>`;
-  }
-  const text = fallbackLabel || fallbackCode || emptyText;
-  const codeAttr = fallbackCode ? ` data-code="${escapeAttr(fallbackCode)}"` : '';
-  return `<tr class="raw-table-row ${colorClass||''}"${codeAttr}><td colspan="${columnCount}">${escapeRawCell(text)}</td></tr>`;
 }
 
 function ensureTableScrollSync(ctx){
@@ -1992,18 +2050,20 @@ function buildRowDataAttributes(entry){
   const parts=[];
   if(entry.code){ parts.push(`data-code="${escapeAttr(entry.code)}"`); }
   if(Number.isFinite(entry.originalIndex)){ parts.push(`data-row-index="${entry.originalIndex}"`); }
-  if(entry.primaryCellCode){
-    parts.push(`data-primary-code="${escapeAttr(entry.primaryCellCode)}"`);
+  const normalizedPrimary=normalizeCode(entry.primaryCellCode||'');
+  const normalizedClosest=normalizeCode(entry.meta?.closestPrimaryCode||'');
+  if(normalizedPrimary && normalizedPrimary===normalizedClosest){
+    parts.push(`data-primary-code="${escapeAttr(normalizedPrimary)}"`);
     parts.push('data-row-kind="primary"');
   }else{
     parts.push('data-row-kind="child"');
   }
-  if(entry.meta?.closestPrimaryCode){
-    parts.push(`data-closest-primary="${escapeAttr(entry.meta.closestPrimaryCode)}"`);
+  if(normalizedClosest){
+    parts.push(`data-closest-primary="${escapeAttr(normalizedClosest)}"`);
   }
   return parts.length? ' '+parts.join(' ') : '';
 }
-function renderTableCells(cells, columnCount, { scoreIndex=-1, pillIndex=-1, row=null, rowScore='' }={}){
+function renderTableCells(cells, columnCount, { scoreIndex=-1, pillIndex=-1, row=null, rowScore='', nameIndex=1 }={}){
   const out=[];
   for(let i=0;i<columnCount;i++){
     const value = Array.isArray(cells) ? cells[i] : '';
@@ -2012,7 +2072,7 @@ function renderTableCells(cells, columnCount, { scoreIndex=-1, pillIndex=-1, row
     if(i===pillIndex && pillIndex>=0) classNames.push('col-pill');
     const classAttr = classNames.length? ` class="${classNames.join(' ')}"` : '';
     let content = (pillIndex>=0 && i===pillIndex) ? renderPillCell(value, { row, rowScore }) : escapeRawCell(value);
-    if(i===1){
+    if(i===nameIndex){
       content = `<span class="cell-inner cell-inner--name">${content}</span>`;
     }
     out.push(`<td${classAttr}>${content}</td>`);

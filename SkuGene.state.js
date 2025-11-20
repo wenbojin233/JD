@@ -90,6 +90,9 @@ const mergePanelStats = {
   edges: document.getElementById('mergeStatEdges'),
   nodes: document.getElementById('mergeStatNodes')
 };
+const historyToggle = document.getElementById('historyToggle');
+const historyPanel = document.getElementById('historyPanel');
+const historyList = document.getElementById('historyList');
 const mergeSearchInput = document.getElementById('mergeSearch');
 const mergeLocateBtn = document.getElementById('mergeLocate');
 const mergeRefreshStatsBtn = document.getElementById('mergeRefreshStats');
@@ -105,6 +108,55 @@ const mergeEdgeLimitLabel = document.getElementById('mergeEdgeLimitLabel');
 const mergeDragLimitInput = document.getElementById('mergeDragLimit');
 const mergeDragLimitLabel = document.getElementById('mergeDragLimitLabel');
 const keeperButtons = Array.from(document.querySelectorAll('.keeper-btn'));
+let pendingMergeLocate=null;
+function requestPendingMergeLocate(code,{ fallbackToGraph=false }={}){
+  if(!code){
+    pendingMergeLocate=null;
+    return;
+  }
+  pendingMergeLocate={
+    code:String(code).trim(),
+    attempts:0,
+    fallback:fallbackToGraph
+  };
+  processPendingMergeLocate();
+}
+function processPendingMergeLocate(){
+  if(!pendingMergeLocate) return;
+  if(activeView!==VIEW_MERGE){
+    setTimeout(processPendingMergeLocate, 200);
+    return;
+  }
+  const target=pendingMergeLocate.code;
+  if(!target){
+    pendingMergeLocate=null;
+    return;
+  }
+  const success = typeof focusMergeNode==='function' ? focusMergeNode(target,{ center:true, select:true }) : false;
+  if(success){
+    try{ if(typeof highlightRawTableRow==='function'){ highlightRawTableRow(target,{ scroll:true, view:'merge' }); } }
+    catch(err){}
+    pendingMergeLocate=null;
+    return;
+  }
+  if(pendingMergeLocate.attempts>=5){
+    const fallback=pendingMergeLocate.fallback;
+    pendingMergeLocate=null;
+    if(fallback && typeof focusGraphNode==='function'){
+      const ok=focusGraphNode(target,{ center:true, select:true });
+      if(ok){
+        try{ if(typeof highlightRawTableRow==='function'){ highlightRawTableRow(target,{ scroll:true, view:'graph' }); } }
+        catch(err){}
+        return;
+      }
+    }
+    alert(`吞并视图中未找到节点 ${target}，请确认已有吞并记录。`);
+    return;
+  }
+  pendingMergeLocate.attempts++;
+  setTimeout(processPendingMergeLocate, 220);
+}
+if(typeof window!=='undefined'){ window.requestPendingMergeLocate = requestPendingMergeLocate; }
 
 function syncGraphStats(summary){
   const totals={
@@ -560,6 +612,7 @@ function applyMergeGraphData(data,{ keepPositions=true, fit=false }={}){
     }
     kickMergeSimulation();
   }
+  processPendingMergeLocate();
 }
 
 function kickMergeSimulation(){
@@ -938,7 +991,9 @@ function toggleMergeStatsBar(active){
   mergeStatsBar.setAttribute('aria-hidden', active? 'false':'true');
 }
 
-function setActiveView(view){
+function setActiveView(view, options){
+  const opts=options||{};
+  const skipMergeFit=!!opts.skipMergeFit;
   const target = view===VIEW_MERGE ? VIEW_MERGE : VIEW_GRAPH;
   const changed = activeView!==target;
   activeView=target;
@@ -968,7 +1023,7 @@ function setActiveView(view){
       ensureMergeNetwork();
       applyMergePhysics();
       if(changed){
-        refreshMergeGraph({ keepPositions:true, fit:true });
+        refreshMergeGraph({ keepPositions:true, fit:!skipMergeFit });
       }else{
         refreshMergeGraph({ keepPositions:true, fit:false });
       }
@@ -1208,10 +1263,26 @@ if(mergeRefreshStatsBtn){
   });
 }
 if(mergeLocateBtn){
-  mergeLocateBtn.addEventListener('click', ()=>{
-    setActiveView(VIEW_MERGE);
-    if(typeof locateMergeNode === 'function'){ locateMergeNode({ input:mergeSearchInput }); }
-  });
+  const triggerMergeLocate=()=>{
+    const performLocate=()=>{
+      if(typeof locateMergeNode === 'function'){ locateMergeNode({ input:mergeSearchInput, fallbackToGraph:true }); }
+    };
+    if(activeView!==VIEW_MERGE){
+      setActiveView(VIEW_MERGE,{ skipMergeFit:true });
+      performLocate();
+    }else{
+      performLocate();
+    }
+  };
+  mergeLocateBtn.addEventListener('click', triggerMergeLocate);
+  if(mergeSearchInput){
+    mergeSearchInput.addEventListener('keydown', (event)=>{
+      if(event.key==='Enter'){
+        event.preventDefault();
+        triggerMergeLocate();
+      }
+    });
+  }
 }
 if(mergeExpandBtn){
   mergeExpandBtn.addEventListener('click', ()=>{
@@ -1243,10 +1314,15 @@ if(mergeCsvBtn){
 }
 const aiMergeBtn=document.getElementById('mergeAiButton');
 if(aiMergeBtn){
-  const defaultText=aiMergeBtn.textContent;
+  const aiBtnLabel=aiMergeBtn.querySelector('.ai-button__text');
+  const defaultText=aiBtnLabel? aiBtnLabel.textContent.trim() : aiMergeBtn.textContent.trim();
+  const setAiButtonText=(text)=>{
+    if(aiBtnLabel){ aiBtnLabel.textContent=text; }
+    else{ aiMergeBtn.textContent=text; }
+  };
   aiMergeBtn.addEventListener('click', ()=>{
     aiMergeBtn.disabled=true;
-    aiMergeBtn.textContent='聚品中…';
+    setAiButtonText('聚品中…');
     try{
       refreshMergeGraph({ keepPositions:false, fit:true, defer:false });
       if(typeof setStatus==='function'){ setStatus('AI 一键聚品完成'); }
@@ -1255,10 +1331,82 @@ if(aiMergeBtn){
     }finally{
       setTimeout(()=>{
         aiMergeBtn.disabled=false;
-        aiMergeBtn.textContent=defaultText;
+        setAiButtonText(defaultText);
       }, 400);
     }
   });
+}
+
+const versionHistoryRecords=[];
+function renderHistoryPanel(){
+  if(!historyList) return;
+  if(!versionHistoryRecords.length){
+    historyList.innerHTML='<div class="history-panel__empty">暂无版本记录</div>';
+    return;
+  }
+  const entries=versionHistoryRecords.map((record,index)=>{
+    const stats=record?.stats||{};
+    const lines=[
+      `当前商品总数：${stats.total ?? '—'}`,
+      `已剔除数据数：${stats.removed ?? '—'}`,
+      `当前同品组数：${stats.groups ?? '—'}`
+    ].map(text=>`<li>${escapeHtmlLite(text)}</li>`).join('');
+    return `<article class="history-version"><div class="history-version__head"><span class="history-version__badge">${escapeHtmlLite(record.label||'正式发布')}</span><span class="history-version__time">${escapeHtmlLite(record.time||'')}</span></div><ul class="history-version__stats">${lines}</ul><div class="history-version__actions"><button type="button" class="history-version__restore" data-history-index="${index}">回溯到该版本</button></div></article>`;
+  }).join('');
+  historyList.innerHTML=`<div class="history-versions">${entries}</div>`;
+}
+function addVersionHistoryRecord(record){
+  versionHistoryRecords.unshift(record);
+  if(versionHistoryRecords.length>10){ versionHistoryRecords.pop(); }
+  renderHistoryPanel();
+}
+if(typeof globalThis!=='undefined'){ globalThis.addVersionHistoryRecord = addVersionHistoryRecord; }
+function seedVersionHistoryRecords(){
+  if(!historyList) return;
+  const seed=[
+    { label:'正式发布', time:'2025-10-16 09:26', stats:{ total:'xx', removed:'xx', groups:'xx' } },
+    { label:'正式发布', time:'2025-10-10 10:12', stats:{ total:'xx', removed:'xx', groups:'xx' } },
+    { label:'正式发布', time:'2025-10-02 08:40', stats:{ total:'xx', removed:'xx', groups:'xx' } }
+  ];
+  seed.forEach(item=> versionHistoryRecords.push(item));
+  renderHistoryPanel();
+}
+seedVersionHistoryRecords();
+if(historyToggle && historyPanel){
+  historyToggle.addEventListener('click', ()=>{
+    const expanded=historyToggle.getAttribute('aria-expanded')==='true';
+    historyToggle.setAttribute('aria-expanded', expanded? 'false':'true');
+    historyPanel.hidden=expanded;
+  });
+}
+if(historyPanel){
+  historyPanel.addEventListener('click', (event)=>{
+    const btn=event.target.closest('.history-version__restore');
+    if(!btn) return;
+    const index=Number(btn.dataset.historyIndex);
+    if(Number.isInteger(index) && index>=0 && index<versionHistoryRecords.length){
+      const record=versionHistoryRecords[index];
+      handleHistoryRestore(record);
+    }
+  });
+}
+document.addEventListener('click', (event)=>{
+  if(!historyPanel || historyPanel.hidden) return;
+  if(historyPanel.contains(event.target) || historyToggle?.contains(event.target)) return;
+  historyPanel.hidden=true;
+  if(historyToggle){ historyToggle.setAttribute('aria-expanded','false'); }
+});
+
+function handleHistoryRestore(record){
+  if(!record){
+    alert('无法回溯：缺少版本信息');
+    return;
+  }
+  const message=`即将回溯到版本：${record.label || '历史版本'}（${record.time || '未知时间'}）。\\n当前配置将被覆盖，确认继续？`;
+  if(confirm(message)){
+    setStatus(`正在回溯至 ${record.label||'历史版本'} ...`);
+    setTimeout(()=> setStatus(`已回溯到 ${record.label||'历史版本'}`), 700);
+  }
 }
 if(mergeNodeLimitInput && mergeNodeLimitLabel){
   mergeNodeLimitLabel.textContent = mergeNodeLimitInput.value;

@@ -380,6 +380,10 @@ function locateMergeNode({ fallbackToGraph=false, input }={}){
     try{ highlightRawTableRow(code,{ scroll:true, view:'merge' }); }catch(err){ /* ignore */ }
     return true;
   }
+  if(typeof requestPendingMergeLocate==='function'){
+    requestPendingMergeLocate(code,{ fallbackToGraph });
+    return true;
+  }
   if(fallbackToGraph){
     const okGraph = typeof focusGraphNode==='function' ? focusGraphNode(code,{ center:true, select:true }) : false;
     if(okGraph){
@@ -409,10 +413,18 @@ function resolveGraphSearchTarget(value){
 function resolveCodeFromInput(value){
   const trimmed=String(value||'').trim();
   if(!trimmed) return null;
-  if(codeExistsInData(trimmed)) return trimmed;
-  const nameMatched=findCodeByName(trimmed);
-  if(nameMatched && codeExistsInData(nameMatched)) return nameMatched;
+  const direct=resolveCodeIncludingMerge(trimmed);
+  if(direct) return direct;
+  const nameMatched=findCodeByName(trimmed) || findCodeInMergeTableByName(trimmed);
+  if(nameMatched && resolveCodeIncludingMerge(nameMatched)) return nameMatched;
   return nameMatched || null;
+}
+
+function resolveCodeIncludingMerge(code){
+  if(!code) return null;
+  if(codeExistsInData(code)) return code;
+  const mergeCode=findCodeInMergeTableByCode(code);
+  return mergeCode || null;
 }
 
 function codeExistsInData(code){
@@ -423,9 +435,22 @@ function codeExistsInData(code){
       const ctx=tableContexts?.graph;
       if(ctx?.dataByCode?.has(code)) return true;
     }
+    if(findCodeInMergeTableByCode(code)) return true;
     if(MT_ctx?.nameOf instanceof Map && MT_ctx.nameOf.has(code)) return true;
   }catch(err){ /* ignore */ }
   return false;
+}
+
+function findCodeInMergeTableByCode(code){
+  try{
+    if(typeof tableContexts==='undefined') return null;
+    const ctx=tableContexts?.merge;
+    if(!ctx || !ctx.dataByCode) return null;
+    const normalized=typeof normalizeCode==='function' ? normalizeCode(code) : String(code||'').trim();
+    if(normalized && ctx.dataByCode.has(normalized)) return normalized;
+    if(ctx.dataByCode.has(String(code))) return String(code);
+  }catch(err){ /* ignore */ }
+  return null;
 }
 
 function findCodeByName(name){
@@ -464,6 +489,47 @@ function findCodeByName(name){
     }
   }catch(err){ /* ignore */ }
   return result;
+}
+
+function findCodeInMergeTableByName(name){
+  if(!name || typeof tableContexts==='undefined') return null;
+  const ctx=tableContexts?.merge;
+  if(!ctx || !Array.isArray(ctx.rows)) return null;
+  const lower=String(name).trim().toLowerCase();
+  if(!lower) return null;
+  let result=null;
+  for(const row of ctx.rows){
+    if(!row) continue;
+    const display=readMergeRowDisplayName(row);
+    if(display && display.toLowerCase()===lower){
+      result=row.code;
+      break;
+    }
+  }
+  if(result) return result;
+  for(const row of ctx.rows){
+    if(!row) continue;
+    const display=readMergeRowDisplayName(row);
+    if(display && display.toLowerCase().includes(lower)){
+      result=row.code;
+      break;
+    }
+  }
+  return result;
+}
+
+function readMergeRowDisplayName(row){
+  const metaName=String(row?.meta?.displayName||'').trim();
+  if(metaName) return metaName;
+  const idx=(typeof rawTableNameIndex==='number' && rawTableNameIndex>=0) ? rawTableNameIndex : -1;
+  if(idx>=0 && Array.isArray(row?.cells)){
+    const cell=row.cells[idx];
+    if(cell!==undefined && cell!==null){
+      const text=String(cell).trim();
+      if(text) return text;
+    }
+  }
+  return '';
 }
 
 function flushNetworkDatasets({ fit=true }={}){
