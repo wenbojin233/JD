@@ -69,12 +69,24 @@ const workerSrc = `(() => {
 
         const ensureReason=(id)=>{ if(!reasonMap.has(id)) reasonMap.set(id,new Map()); return reasonMap.get(id); };
         const total=rows.length-1; let processed=0;
+        let lastPrimaryCode='';
 
         for(let r=1;r<rows.length;r++){
           const row=rows[r]; if(!row) continue;
-          const code=String(row[codeIdx]||'').trim(); if(!code) continue;
-          const name=String(row[nameIdx]||'').trim(); if(name && !nameOf.has(code)) nameOf.set(code,name);
-          const rel =String(row[relIdx]||'').trim(); if(!rel) continue;
+          const rawPrimary=String(row[codeIdx]||'').trim();
+          let code=rawPrimary;
+          if(code){
+            lastPrimaryCode=code;
+          }else if(lastPrimaryCode){
+            code=lastPrimaryCode;
+          }
+          const rel =String(row[relIdx]||'').trim(); if(!code || !rel) continue;
+          const nameCell=String(row[nameIdx]||'').trim();
+          if(rawPrimary){
+            if(nameCell && !nameOf.has(code)) nameOf.set(code,nameCell);
+          }else if(nameCell && !nameOf.has(rel)){
+            nameOf.set(rel, nameCell);
+          }
           const reasonLookup=new Map();
           if(reasonIdx!==-1){
             const cell=row[reasonIdx];
@@ -121,12 +133,20 @@ const workerSrc = `(() => {
         }
 
         const ids=new Set(), compOf=new Map(), comps=new Map();
+        let carryPrimary='';
         for(let r=1;r<rows.length;r++){
           const row=rows[r]; if(!row) continue;
-          const code=String(row[codeIdx]||'').trim(); if(code) ids.add(code);
+          const rawPrimary=String(row[codeIdx]||'').trim();
+          if(rawPrimary){ ids.add(rawPrimary); carryPrimary=rawPrimary; }
+          else if(carryPrimary){ ids.add(carryPrimary); }
           const rel =String(row[relIdx]||'').trim();
           if(rel){ rel.split(',').forEach(x=>{ x=x.trim(); if(x) ids.add(x); }); }
-          const name=String(row[nameIdx]||'').trim(); if(code && name && !nameOf.has(code)) nameOf.set(code,name);
+          const name=String(row[nameIdx]||'').trim();
+          if(rawPrimary && name && !nameOf.has(rawPrimary)) nameOf.set(rawPrimary,name);
+          else if(!rawPrimary && name){
+            const relCode=String(row[relIdx]||'').trim();
+            if(relCode && !nameOf.has(relCode)) nameOf.set(relCode, name);
+          }
         }
         for(const id of ids){ dsu.make(id); compOf.set(id, dsu.find(id)); }
         for(const id of ids){ const c=compOf.get(id); if(!comps.has(c)) comps.set(c,new Set()); comps.get(c).add(id); }

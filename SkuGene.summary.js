@@ -5,8 +5,12 @@ let rawTableFallbackCodeIndexes=[];
 let rawTableRelationIndexes=[];
 let rawTableNameIndex=-1;
 let rawTableSameIdIndex=-1;
-const NAME_HEADER_KEYWORDS_LOWER=['同品商品ID','名称','商品名称','物料名称','品名','标题','name','Name'];
-const SAME_ID_HEADER_KEYWORDS_LOWER=['同品商品ID','同品ID','商品ID'];
+let rawTablePeerCodeIndexes=[];
+let rawTablePillColumnIndexes=[];
+let rawTableGroupCodeIndex=-1;
+let groupPeerCodeMap=new Map();
+const NAME_HEADER_KEYWORDS_LOWER=['同品商品ID','名称','商品名称','物料名称','物料描述','品名','标题','name','Name'];
+const SAME_ID_HEADER_KEYWORDS_LOWER=['同品商品ID','同品ID','商品ID','同品组编码','同品关系编码','同品物料编码'];
 let graphNameIndex=new Map();
 if(typeof window!=='undefined'){ window.graphNameIndex = graphNameIndex; }
 const FALLBACK_CODE_KEYWORDS_LOWER=['同品','候选','归属','主品','聚品','剔除','吞并','victim','candidate','中心','合并'];
@@ -54,6 +58,10 @@ const tablePrimaryCollapseState={
   merge:new Map()
 };
 const GRAPH_GROUP_COLOR_CLASSES=['merge-group--a','merge-group--b','merge-group--c','merge-group--d','merge-group--e'];
+const PRIMARY_CODE_HEADER_CANDIDATES=['物料编码','商品编码','主品编码','主品商品编码','查询商品','查询节点','Query Item','Query Code'];
+const GROUP_CODE_HEADER_LABELS=['同品关系编码','同品组编码','同品商品ID','同品ID'];
+const PEER_CODE_HEADER_LABELS=['同品物料编码','同品物料編碼'];
+const TASK_INDICATOR_HEADER_LABELS=['是否本次任务物料'];
 const MERGE_TABLE_COLUMNS=[
   { key:'seq', label:'同品组序号' },
   { key:'code', label:'商品编码' },
@@ -146,17 +154,42 @@ function detectNameColumnIndex(headerRow){
   return -1;
 }
 
-function detectSameIdColumnIndex(headerRow){
-  if(!Array.isArray(headerRow)) return -1;
+function detectSameIdColumnIndexes(headerRow){
+  if(!Array.isArray(headerRow)) return [];
+  const indexes=[];
   for(let i=0;i<headerRow.length;i++){
     const raw=String(headerRow[i]??'').trim();
     if(!raw) continue;
     const lower=raw.toLowerCase();
     if(SAME_ID_HEADER_KEYWORDS_LOWER.some(keyword=> lower.includes(keyword.toLowerCase()))){
-      return i;
+      indexes.push(i);
     }
   }
-  return -1;
+  return indexes;
+}
+
+function detectPeerCodeColumnIndexes(headerRow){
+  return findAllColumnIndexesByLabels(headerRow, PEER_CODE_HEADER_LABELS);
+}
+
+function findColumnIndexByLabels(headerRow, labels){
+  const indexes=findAllColumnIndexesByLabels(headerRow, labels);
+  return indexes.length? indexes[0] : -1;
+}
+
+function findAllColumnIndexesByLabels(headerRow, labels){
+  if(!Array.isArray(headerRow) || !Array.isArray(labels) || !labels.length) return [];
+  const targets=labels.map(label=> normalizeHeaderKey(label)).filter(Boolean);
+  if(!targets.length) return [];
+  const result=[];
+  for(let i=0;i<headerRow.length;i++){
+    const key=normalizeHeaderKey(headerRow[i]);
+    if(!key) continue;
+    if(targets.includes(key)){
+      result.push(i);
+    }
+  }
+  return result;
 }
 function matchesRelationHeader(labelLower){
   if(!labelLower) return false;
@@ -884,7 +917,11 @@ function setRawDataRows(rows){
   rawTableFallbackCodeIndexes = detectFallbackCodeIndexes(headerRow);
   rawTableRelationIndexes = detectRelationIndexes(headerRow);
   rawTableNameIndex = detectNameColumnIndex(headerRow);
-  rawTableSameIdIndex = detectSameIdColumnIndex(headerRow);
+  rawTablePillColumnIndexes = detectSameIdColumnIndexes(headerRow);
+  rawTableSameIdIndex = rawTablePillColumnIndexes.length? rawTablePillColumnIndexes[0] : -1;
+  rawTablePeerCodeIndexes = detectPeerCodeColumnIndexes(headerRow);
+  rawTableGroupCodeIndex = findColumnIndexByLabels(headerRow, GROUP_CODE_HEADER_LABELS);
+  if(rawTableGroupCodeIndex<0){ rawTableGroupCodeIndex = rawTableSameIdIndex; }
   const bodyRows = rawDataRows.slice(1);
   initializeTableDataFromBody(bodyRows);
   renderTableContext('graph');
@@ -900,6 +937,7 @@ function initializeTableDataFromBody(bodyRows){
   graphCtx.dataByCode = new Map();
   graphCtx.rows.forEach(entry=>{ if(entry.code){ graphCtx.dataByCode.set(entry.code, entry); } });
   buildGraphNameIndex(graphCtx.rows);
+  buildGroupPeerCodeAggregation(graphCtx.rows);
   mergeCtx.rows = [];
   mergeCtx.dataByCode = new Map();
   tableGroupCollapseState.graph.clear();
@@ -1013,14 +1051,36 @@ function assignClosestPrimaryCodes(entries){
     if(!entry || typeof entry!=='object') return;
     if(!entry.meta) entry.meta={};
     const primaryRaw = entry.primaryCellCode ? String(entry.primaryCellCode).trim() : '';
-    const normalizedPrimary = primaryRaw ? normalizeCode(primaryRaw) : '';
-    if(normalizedPrimary){
-      lastPrimary = normalizedPrimary;
-      entry.meta.closestPrimaryCode = normalizedPrimary;
-    }else{
-      entry.meta.closestPrimaryCode = lastPrimary || '';
+    const normalizedPrimaryRaw = primaryRaw ? normalizeCode(primaryRaw) : '';
+    const groupCodeRaw = readGroupCodeValue(entry.cells);
+    const normalizedGroupCode = groupCodeRaw ? normalizeCode(groupCodeRaw) : '';
+    const entryCode = normalizeCode(entry.code || entry.rawCode || '');
+    if(normalizedPrimaryRaw){
+      entry.meta.isPrimaryRow = true;
+      lastPrimary = normalizedPrimaryRaw;
+      entry.meta.closestPrimaryCode = normalizedPrimaryRaw;
+      return;
     }
+    if(normalizedGroupCode){
+      if(!entry.meta.closestPrimaryCode || entry.meta.closestPrimaryCode!==normalizedGroupCode){
+        entry.meta.closestPrimaryCode = normalizedGroupCode;
+      }
+      lastPrimary = normalizedGroupCode;
+      if(entryCode && entryCode===normalizedGroupCode){
+        entry.meta.isPrimaryRow = true;
+      }
+      return;
+    }
+    entry.meta.closestPrimaryCode = lastPrimary || '';
   });
+}
+
+function readGroupCodeValue(cells){
+  if(!Array.isArray(cells)) return '';
+  const idx = Number.isInteger(rawTableGroupCodeIndex) ? rawTableGroupCodeIndex : -1;
+  if(idx<0 || idx>=cells.length) return '';
+  const value=cells[idx];
+  return value===undefined || value===null ? '' : String(value).trim();
 }
 
 function buildGraphNameIndex(entries){
@@ -1039,6 +1099,113 @@ function buildGraphNameIndex(entries){
   if(typeof window!=='undefined'){
     window.graphNameIndex = graphNameIndex;
   }
+}
+
+function buildGroupPeerCodeAggregation(entries){
+  groupPeerCodeMap=new Map();
+  if(!Array.isArray(entries) || !entries.length) return;
+  entries.forEach(entry=>{
+    if(!entry || !Array.isArray(entry.cells)) return;
+    const groupCode=resolveGroupCodeForEntry(entry);
+    if(!groupCode) return;
+    const bucket=ensureGroupPeerBucket(groupCode);
+    const primaryCode=normalizeCode(entry.primaryCellCode || entry.code || entry.rawCode || '');
+    if(primaryCode){ addCodeToGroupBucket(bucket, primaryCode); }
+    if(Array.isArray(rawTablePeerCodeIndexes) && rawTablePeerCodeIndexes.length){
+      rawTablePeerCodeIndexes.forEach(idx=>{
+        if(!Number.isInteger(idx) || idx<0 || idx>=entry.cells.length) return;
+        const candidates=extractCodesFromMixedValue(entry.cells[idx]);
+        candidates.forEach(code=> addCodeToGroupBucket(bucket, code));
+      });
+    }
+  });
+}
+
+function ensureGroupPeerBucket(groupCode){
+  if(!groupPeerCodeMap.has(groupCode)){
+    groupPeerCodeMap.set(groupCode,{ list:[], seen:new Set() });
+  }
+  return groupPeerCodeMap.get(groupCode);
+}
+
+function addCodeToGroupBucket(bucket, code){
+  const normalized=normalizeCode(code);
+  if(!normalized || !bucket) return;
+  if(bucket.seen.has(normalized)) return;
+  bucket.seen.add(normalized);
+  bucket.list.push(normalized);
+}
+
+function resolveGroupCodeForEntry(entry){
+  if(!entry) return '';
+  const fromCell=normalizeCode(readGroupCodeValue(entry.cells));
+  if(fromCell) return fromCell;
+  const metaClosest=normalizeCode(entry.meta?.closestPrimaryCode || '');
+  if(metaClosest) return metaClosest;
+  const fallback=normalizeCode(entry.code || entry.rawCode || '');
+  return fallback;
+}
+
+function extractCodesFromMixedValue(value){
+  const acc=[];
+  collectCodesFromMixedValue(value, acc);
+  return acc;
+}
+
+function collectCodesFromMixedValue(value, acc){
+  if(value===undefined || value===null) return;
+  if(Array.isArray(value)){
+    value.forEach(item=> collectCodesFromMixedValue(item, acc));
+    return;
+  }
+  if(typeof value==='object'){
+    let matchedKey=false;
+    for(const key of CANDIDATE_CODE_OBJECT_KEYS){
+      if(Object.prototype.hasOwnProperty.call(value, key)){
+        collectCodesFromMixedValue(value[key], acc);
+        matchedKey=true;
+      }
+    }
+    if(!matchedKey){
+      try{
+        const serialized=JSON.stringify(value);
+        collectCodesFromMixedValue(serialized, acc);
+      }catch(err){ /* ignore */ }
+    }
+    return;
+  }
+  if(typeof value==='number'){
+    const normalized=normalizeCode(String(value));
+    if(normalized) acc.push(normalized);
+    return;
+  }
+  if(typeof value==='string'){
+    const text=value.trim();
+    if(!text) return;
+    if((text.startsWith('[') && text.endsWith(']')) || (text.startsWith('{') && text.endsWith('}'))){
+      try{
+        const parsed=JSON.parse(text);
+        collectCodesFromMixedValue(parsed, acc);
+      }catch(err){ /* ignore */ }
+      return;
+    }
+    text.split(/[,，;；\s]+/).forEach(token=>{
+      const normalized=normalizeCode(token);
+      if(normalized) acc.push(normalized);
+    });
+    return;
+  }
+  const normalized=normalizeCode(String(value));
+  if(normalized) acc.push(normalized);
+}
+
+function getAggregatedPeerCodesForRow(row){
+  if(!row || !groupPeerCodeMap || !groupPeerCodeMap.size) return '';
+  const groupCode=resolveGroupCodeForEntry(row);
+  if(!groupCode) return '';
+  const bucket=groupPeerCodeMap.get(groupCode);
+  if(!bucket || !bucket.list.length) return '';
+  return bucket.list.join(' ');
 }
 
 function handleRelationRemovalBetweenCodes(codeA, codeB){
@@ -1197,7 +1364,10 @@ function buildTableColumnOrder(rows, { includeScore=true }={}){
   const safeRows = Array.isArray(rows)? rows : [];
   const header=Array.isArray(rawTableHeader)? rawTableHeader : [];
   const reasonIndex=findReasonColumnIndex();
-  const pillColumnIndexRaw = Number.isInteger(rawTableSameIdIndex) ? rawTableSameIdIndex : -1;
+  const pillColumnIndexesRaw = Array.isArray(rawTablePillColumnIndexes) && rawTablePillColumnIndexes.length
+    ? rawTablePillColumnIndexes.slice()
+    : (Number.isInteger(rawTableSameIdIndex) && rawTableSameIdIndex>=0 ? [rawTableSameIdIndex] : []);
+  const pillIndexSet=new Set(pillColumnIndexesRaw);
   const maxRowCellsLen = Math.max(...safeRows.map(row=> Array.isArray(row.cells)? row.cells.length : 0), header.length || 0, 1);
   const baseColumns=[];
   for(let i=0;i<maxRowCellsLen;i++){
@@ -1206,8 +1376,10 @@ function buildTableColumnOrder(rows, { includeScore=true }={}){
       label,
       sourceIndex:i,
       isReason:i===reasonIndex,
-      isPill:i===pillColumnIndexRaw,
-      kind:'data'
+      isPill:pillIndexSet.has(i),
+      kind:'data',
+      isPrimaryCode: matchesPrimaryCodeHeader(label),
+      isPeerCode: matchesPeerCodeHeader(label)
     });
   }
   const columnOrder=[];
@@ -1230,6 +1402,9 @@ function buildTableColumnOrder(rows, { includeScore=true }={}){
     reasonColumn.kind='reason';
     columnOrder.push(reasonColumn);
   }
+  if(columnOrder.length){
+    moveTaskIndicatorColumnToEnd(columnOrder);
+  }
   if(!columnOrder.length){
     columnOrder.push({
       label:'列1',
@@ -1243,21 +1418,61 @@ function buildTableColumnOrder(rows, { includeScore=true }={}){
     columnOrder,
     columnCount:columnOrder.length,
     scoreColumnIndex: columnOrder.findIndex(col=>col.kind==='score'),
-    pillColumnIndex: columnOrder.findIndex(col=>col.isPill),
+    pillColumnIndexes: pillColumnIndexesRaw,
     reasonSourceIndex:reasonIndex
   };
 }
 
-function mapCellsToColumnOrder(cells, columnOrder, scoreOverride){
-  const source = Array.isArray(cells)? cells : [];
+function moveTaskIndicatorColumnToEnd(columnOrder){
+  if(!Array.isArray(columnOrder) || !columnOrder.length) return;
+  const idx=columnOrder.findIndex(col=> isTaskIndicatorColumn(col?.label));
+  if(idx<0) return;
+  const [column]=columnOrder.splice(idx,1);
+  columnOrder.push(column);
+}
+
+function isTaskIndicatorColumn(label){
+  const normalized=normalizeHeaderLabel(label);
+  if(!normalized) return false;
+  const compact=normalized.replace(/\s+/g,'');
+  return TASK_INDICATOR_HEADER_LABELS.some(target=> compact===normalizeHeaderLabel(target).replace(/\s+/g,''));
+}
+
+function normalizeHeaderKey(label){
+  const normalized=normalizeHeaderLabel(label);
+  if(!normalized) return '';
+  return normalized.replace(/\s+/g,'').toLowerCase();
+}
+
+function matchesPrimaryCodeHeader(label){
+  const compact=normalizeHeaderKey(label);
+  if(!compact) return false;
+  return PRIMARY_CODE_HEADER_CANDIDATES.some(target=> compact===normalizeHeaderKey(target));
+}
+
+function matchesPeerCodeHeader(label){
+  const compact=normalizeHeaderKey(label);
+  if(!compact) return false;
+  return PEER_CODE_HEADER_LABELS.some(target=> compact===normalizeHeaderKey(target));
+}
+
+function mapCellsToColumnOrder(row, columnOrder, scoreOverride){
+  const source = Array.isArray(row?.cells)? row.cells : [];
   return columnOrder.map(col=>{
     if(col.kind==='score'){
       return scoreOverride ?? '';
     }
+    let value='';
     if(Number.isInteger(col.sourceIndex)){
-      return source[col.sourceIndex];
+      value = source[col.sourceIndex];
     }
-    return '';
+    if(col.isPeerCode && row?.meta?.isPrimaryRow){
+      const aggregated = getAggregatedPeerCodesForRow(row);
+      if(aggregated){
+        return aggregated;
+      }
+    }
+    return value;
   });
 }
 
@@ -1280,7 +1495,8 @@ function buildRowScoreMap(rows, { reasonIndex=-1 }={}){
       if(parsed && parsed.size){
         scoreCache.set(primary, parsed);
       }
-      map.set(entry, '');
+      const directScore=extractScoreFromReasonCell(reasonCell);
+      map.set(entry, directScore);
       return;
     }
     let assigned='';
@@ -1370,7 +1586,7 @@ function renderGraphTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
   placeholder.setAttribute('aria-hidden','true');
   scrollWrapper.hidden=false;
   const columnConfig=buildTableColumnOrder(rows, { includeScore:true });
-  const { columnOrder, columnCount, scoreColumnIndex, pillColumnIndex, reasonSourceIndex } = columnConfig;
+  const { columnOrder, columnCount, scoreColumnIndex, pillColumnIndexes, reasonSourceIndex } = columnConfig;
   const scoreMap = (scoreColumnIndex>=0) ? buildRowScoreMap(rows, { reasonIndex:reasonSourceIndex }) : null;
   const headCells=columnOrder.map((col, idx)=>{
     const thClasses=[];
@@ -1379,8 +1595,8 @@ function renderGraphTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
     return `<th scope="col"${thClassAttr}>${escapeRawCell(col.label)}</th>`;
   });
   const groups=buildGraphComponentGroupList(rows);
-  const colWidths = buildGraphColumnRules(columnCount, { scoreIndex:scoreColumnIndex, pillIndex:pillColumnIndex });
-  const buildDisplayCells=(row)=> mapCellsToColumnOrder(row.cells, columnOrder, scoreMap?.get(row));
+  const colWidths = buildGraphColumnRules(columnCount, { scoreIndex:scoreColumnIndex, pillIndexes:pillColumnIndexes });
+  const buildDisplayCells=(row)=> mapCellsToColumnOrder(row, columnOrder, scoreMap?.get(row));
   let sections='';
   if(groups.length){
     sections=groups.map((group, idx)=>{
@@ -1392,7 +1608,7 @@ function renderGraphTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
         const attrs = buildRowDataAttributes(row);
         const displayCells = buildDisplayCells(row);
         const rowScore = scoreMap?.get(row) ?? '';
-        return `<tr class="raw-table-row ${colorClass}"${attrs}>${renderTableCells(displayCells, columnCount, { scoreIndex:scoreColumnIndex, pillIndex:pillColumnIndex, row, rowScore })}</tr>`;
+        return `<tr class="raw-table-row ${colorClass}"${attrs}>${renderTableCells(displayCells, columnCount, { scoreIndex:scoreColumnIndex, pillIndexes:pillColumnIndexes, row, rowScore })}</tr>`;
       }).join('');
       return `<tbody class="merge-group ${colorClass}${collapsed? ' is-collapsed':''}" data-group="${escapeAttr(group.key)}" data-table="graph">${headerRow}${rowsHtml}</tbody>`;
     }).join('');
@@ -1402,7 +1618,7 @@ function renderGraphTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
       const attrs = buildRowDataAttributes(row);
       const displayCells = buildDisplayCells(row);
       const rowScore = scoreMap?.get(row) ?? '';
-      return `<tr class="raw-table-row"${attrs}>${renderTableCells(displayCells, columnCount, { scoreIndex:scoreColumnIndex, pillIndex:pillColumnIndex, row, rowScore })}</tr>`;
+      return `<tr class="raw-table-row"${attrs}>${renderTableCells(displayCells, columnCount, { scoreIndex:scoreColumnIndex, pillIndexes:pillColumnIndexes, row, rowScore })}</tr>`;
     }).join('');
     sections = `<tbody>${bodyHtml}</tbody>`;
   }
@@ -1603,7 +1819,7 @@ function renderMergeDataRow({ columnCount, groupSeq, entry, fallbackCode, fallba
     primary || ''
   ];
   const attrs=buildMergeRowAttributes(entry, code, primary);
-  return `<tr class="raw-table-row ${colorClass||''}"${attrs}>${renderTableCells(cells, columnCount, { scoreIndex:-1, pillIndex:-1, row:entry, nameIndex:2 })}</tr>`;
+  return `<tr class="raw-table-row ${colorClass||''}"${attrs}>${renderTableCells(cells, columnCount, { scoreIndex:-1, pillIndexes:[], row:entry, nameIndex:2 })}</tr>`;
 }
 
 function buildMergeRowAttributes(entry, code, primary){
@@ -2050,28 +2266,26 @@ function buildRowDataAttributes(entry){
   const parts=[];
   if(entry.code){ parts.push(`data-code="${escapeAttr(entry.code)}"`); }
   if(Number.isFinite(entry.originalIndex)){ parts.push(`data-row-index="${entry.originalIndex}"`); }
-  const normalizedPrimary=normalizeCode(entry.primaryCellCode||'');
   const normalizedClosest=normalizeCode(entry.meta?.closestPrimaryCode||'');
-  if(normalizedPrimary && normalizedPrimary===normalizedClosest){
-    parts.push(`data-primary-code="${escapeAttr(normalizedPrimary)}"`);
+  if(entry.meta?.isPrimaryRow && normalizedClosest){
+    parts.push(`data-primary-code="${escapeAttr(normalizedClosest)}"`);
     parts.push('data-row-kind="primary"');
-  }else{
-    parts.push('data-row-kind="child"');
   }
   if(normalizedClosest){
     parts.push(`data-closest-primary="${escapeAttr(normalizedClosest)}"`);
   }
   return parts.length? ' '+parts.join(' ') : '';
 }
-function renderTableCells(cells, columnCount, { scoreIndex=-1, pillIndex=-1, row=null, rowScore='', nameIndex=1 }={}){
+function renderTableCells(cells, columnCount, { scoreIndex=-1, pillIndexes=[], row=null, rowScore='', nameIndex=1 }={}){
   const out=[];
   for(let i=0;i<columnCount;i++){
     const value = Array.isArray(cells) ? cells[i] : '';
     const classNames=[];
     if(i===scoreIndex) classNames.push('col-score');
-    if(i===pillIndex && pillIndex>=0) classNames.push('col-pill');
+    const isPillColumn = Array.isArray(pillIndexes) ? pillIndexes.includes(i) : (typeof pillIndexes==='number' ? i===pillIndexes : false);
+    if(isPillColumn) classNames.push('col-pill');
     const classAttr = classNames.length? ` class="${classNames.join(' ')}"` : '';
-    let content = (pillIndex>=0 && i===pillIndex) ? renderPillCell(value, { row, rowScore }) : escapeRawCell(value);
+    let content = isPillColumn ? renderPillCell(value, { row, rowScore }) : escapeRawCell(value);
     if(i===nameIndex){
       content = `<span class="cell-inner cell-inner--name">${content}</span>`;
     }
@@ -2080,13 +2294,14 @@ function renderTableCells(cells, columnCount, { scoreIndex=-1, pillIndex=-1, row
   return out.join('');
 }
 
-function buildGraphColumnRules(columnCount, { scoreIndex=-1, pillIndex=-1 }={}){
+function buildGraphColumnRules(columnCount, { scoreIndex=-1, pillIndexes=[] }={}){
   if(columnCount<=0) return '';
   const cols=[];
   for(let i=0;i<columnCount;i++){
     const styleParts=[];
     const classNames=[];
-    if(i===pillIndex && pillIndex>=0){
+    const isPillColumn = Array.isArray(pillIndexes) ? pillIndexes.includes(i) : (typeof pillIndexes==='number' ? i===pillIndexes : false);
+    if(isPillColumn){
       styleParts.push('width:680px');
       classNames.push('col-pill-col');
     }

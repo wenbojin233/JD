@@ -7,7 +7,7 @@ const MERGE_DRAG_LIMIT = 360;
 let mergeNodeLimitSetting = MERGE_NODE_LIMIT;
 let mergeEdgeLimitSetting = MERGE_EDGE_LIMIT;
 let mergeDragLimitSetting = MERGE_DRAG_LIMIT;
-const DEFAULT_SHEET_NAME = 'same_result';
+const DEFAULT_SHEET_NAME = '同品关系';
 let mergeInitialFitDone = false;
 let mergeDragState=null;
 let mergeDragUpdateScheduled=false;
@@ -93,14 +93,15 @@ const mergePanelStats = {
 const historyToggle = document.getElementById('historyToggle');
 const historyPanel = document.getElementById('historyPanel');
 const historyList = document.getElementById('historyList');
+const historyConfirm = document.getElementById('historyConfirm');
+const historyConfirmDesc = document.getElementById('historyConfirmDesc');
+const historyConfirmAccept = document.getElementById('historyConfirmAccept');
+const historyConfirmCancel = document.getElementById('historyConfirmCancel');
 const mergeSearchInput = document.getElementById('mergeSearch');
 const mergeLocateBtn = document.getElementById('mergeLocate');
 const mergeRefreshStatsBtn = document.getElementById('mergeRefreshStats');
-const mergeExpandBtn = document.getElementById('mergeExpandBtn');
 const mergeResetBtn = document.getElementById('mergeResetBtn');
 const mergeExportPngBtn = document.getElementById('mergeExportPng');
-const mergeGotoGraphBtn = document.getElementById('mergeGotoGraph');
-const mergeCsvBtn = document.getElementById('mergeCsvBtn');
 const mergeNodeLimitInput = document.getElementById('mergeNodeLimit');
 const mergeNodeLimitLabel = document.getElementById('mergeNodeLimitLabel');
 const mergeEdgeLimitInput = document.getElementById('mergeEdgeLimit');
@@ -108,7 +109,13 @@ const mergeEdgeLimitLabel = document.getElementById('mergeEdgeLimitLabel');
 const mergeDragLimitInput = document.getElementById('mergeDragLimit');
 const mergeDragLimitLabel = document.getElementById('mergeDragLimitLabel');
 const keeperButtons = Array.from(document.querySelectorAll('.keeper-btn'));
+const scoreDropdownToggle=document.getElementById('scoreDropdownToggle');
+const scoreDropdownMenu=document.getElementById('scoreDropdownMenu');
+const scoreDropdownCustom=document.getElementById('scoreDropdownCustom');
+const scoreDropdownApply=document.getElementById('scoreDropdownApply');
 let pendingMergeLocate=null;
+let pendingHistoryRecord=null;
+let currentScoreValue='100';
 function requestPendingMergeLocate(code,{ fallbackToGraph=false }={}){
   if(!code){
     pendingMergeLocate=null;
@@ -1255,6 +1262,60 @@ keeperButtons.forEach(btn=>{
     btn.setAttribute('aria-pressed', active? 'true':'false');
   });
 });
+function updateScoreDropdownValue(value){
+  currentScoreValue=value;
+  const label=scoreDropdownToggle?.querySelector('.score-dropdown__label');
+  if(label){ label.textContent=`分数：${value}`; }
+  if(typeof setStatus==='function'){ setStatus(`分数阈值已设置为 ${value} 分`); }
+}
+function openScoreDropdown(){
+  if(scoreDropdownMenu){
+    scoreDropdownMenu.hidden=false;scoreDropdownMenu.classList.add('is-open');
+  }
+  if(scoreDropdownToggle){
+    scoreDropdownToggle.setAttribute('aria-expanded','true');
+  }
+}
+function closeScoreDropdown(){
+  if(scoreDropdownMenu){
+    scoreDropdownMenu.hidden=true;scoreDropdownMenu.classList.remove('is-open');
+  }
+  if(scoreDropdownToggle){
+    scoreDropdownToggle.setAttribute('aria-expanded','false');
+  }
+}
+if(scoreDropdownToggle){
+  scoreDropdownToggle.addEventListener('click', ()=>{
+    const expanded=scoreDropdownToggle.getAttribute('aria-expanded')==='true';
+    if(expanded){ closeScoreDropdown(); }
+    else{ openScoreDropdown(); }
+  });
+}
+if(scoreDropdownMenu){
+  scoreDropdownMenu.addEventListener('click', (event)=>{
+    const btn=event.target.closest('button[data-score]');
+    if(!btn) return;
+    updateScoreDropdownValue(btn.dataset.score||'100');
+    closeScoreDropdown();
+  });
+}
+if(scoreDropdownApply){
+  scoreDropdownApply.addEventListener('click', ()=>{
+    const val=Number(scoreDropdownCustom?.value);
+    if(Number.isFinite(val)){
+      updateScoreDropdownValue(String(val));
+      closeScoreDropdown();
+    }else{
+      alert('请输入有效的分数');
+    }
+  });
+}
+updateScoreDropdownValue(currentScoreValue);
+document.addEventListener('click', (event)=>{
+  if(!scoreDropdownMenu || scoreDropdownMenu.hidden) return;
+  if(scoreDropdownToggle?.contains(event.target) || scoreDropdownMenu.contains(event.target)) return;
+  closeScoreDropdown();
+});
 if(mergeRefreshStatsBtn){
   mergeRefreshStatsBtn.addEventListener('click', ()=>{
     setActiveView(VIEW_MERGE);
@@ -1284,13 +1345,6 @@ if(mergeLocateBtn){
     });
   }
 }
-if(mergeExpandBtn){
-  mergeExpandBtn.addEventListener('click', ()=>{
-    setActiveView(VIEW_MERGE);
-    refreshMergeGraph({ keepPositions:false, fit:true });
-    setStatus('吞并视图刷新中…');
-  });
-}
 if(mergeResetBtn){
   mergeResetBtn.addEventListener('click', ()=>{
     setActiveView(VIEW_MERGE);
@@ -1299,18 +1353,6 @@ if(mergeResetBtn){
 }
 if(mergeExportPngBtn){
   mergeExportPngBtn.addEventListener('click', ()=>{ if(typeof exportMergePNG==='function'){ exportMergePNG(); } });
-}
-if(mergeGotoGraphBtn){
-  mergeGotoGraphBtn.addEventListener('click', ()=>{
-    setActiveView(VIEW_GRAPH);
-    if(mergeSearchInput?.value){
-      const id=mergeSearchInput.value.trim();
-      if(id && typeof locateNodeFromMerge === 'function'){ locateNodeFromMerge(id); }
-    }
-  });
-}
-if(mergeCsvBtn){
-  mergeCsvBtn.addEventListener('click', () => { if (typeof exportMergeCSV === 'function') { exportMergeCSV(); } });
 }
 const aiMergeBtn=document.getElementById('mergeAiButton');
 if(aiMergeBtn){
@@ -1364,9 +1406,9 @@ if(typeof globalThis!=='undefined'){ globalThis.addVersionHistoryRecord = addVer
 function seedVersionHistoryRecords(){
   if(!historyList) return;
   const seed=[
-    { label:'正式发布', time:'2025-10-16 09:26', stats:{ total:'xx', removed:'xx', groups:'xx' } },
-    { label:'正式发布', time:'2025-10-10 10:12', stats:{ total:'xx', removed:'xx', groups:'xx' } },
-    { label:'正式发布', time:'2025-10-02 08:40', stats:{ total:'xx', removed:'xx', groups:'xx' } }
+    { label:'正式发布', time:'2025-10-16 09:26', stats:{ total:'18,420', removed:'2,135', groups:'3,276' } },
+    { label:'正式发布', time:'2025-10-10 10:12', stats:{ total:'17,860', removed:'1,940', groups:'3,198' } },
+    { label:'正式发布', time:'2025-10-02 08:40', stats:{ total:'17,050', removed:'1,502', groups:'3,012' } }
   ];
   seed.forEach(item=> versionHistoryRecords.push(item));
   renderHistoryPanel();
@@ -1402,11 +1444,48 @@ function handleHistoryRestore(record){
     alert('无法回溯：缺少版本信息');
     return;
   }
+  if(openHistoryConfirm(record)) return;
   const message=`即将回溯到版本：${record.label || '历史版本'}（${record.time || '未知时间'}）。\\n当前配置将被覆盖，确认继续？`;
   if(confirm(message)){
-    setStatus(`正在回溯至 ${record.label||'历史版本'} ...`);
-    setTimeout(()=> setStatus(`已回溯到 ${record.label||'历史版本'}`), 700);
+    applyHistoryRestore(record);
   }
+}
+function openHistoryConfirm(record){
+  if(!historyConfirm || !historyConfirmDesc || !historyConfirmAccept) return false;
+  pendingHistoryRecord=record;
+  historyConfirmDesc.textContent = `确定回溯到 ${record.label || '历史版本'}（${record.time || '未知时间'}）吗？当前配置将被覆盖。`;
+  historyConfirm.hidden=false;
+  return true;
+}
+function closeHistoryConfirm(){
+  if(historyConfirm){ historyConfirm.hidden=true; }
+  pendingHistoryRecord=null;
+}
+function applyHistoryRestore(record){
+  closeHistoryConfirm();
+  setStatus(`正在回溯至 ${record.label||'历史版本'} ...`);
+  setTimeout(()=> setStatus(`已回溯到 ${record.label||'历史版本'}`), 700);
+}
+if(historyConfirmCancel){
+  historyConfirmCancel.addEventListener('click', closeHistoryConfirm);
+}
+if(historyConfirmAccept){
+  historyConfirmAccept.addEventListener('click', ()=>{
+    if(pendingHistoryRecord){
+      const record=pendingHistoryRecord;
+      pendingHistoryRecord=null;
+      applyHistoryRestore(record);
+    }else{
+      closeHistoryConfirm();
+    }
+  });
+}
+if(historyConfirm){
+  historyConfirm.addEventListener('click', (event)=>{
+    if(event.target===historyConfirm){
+      closeHistoryConfirm();
+    }
+  });
 }
 if(mergeNodeLimitInput && mergeNodeLimitLabel){
   mergeNodeLimitLabel.textContent = mergeNodeLimitInput.value;

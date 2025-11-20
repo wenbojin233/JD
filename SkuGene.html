@@ -14,7 +14,7 @@
     <div class="head">
       <div class="title">
         <h2>同品关系可视化管理</h2>
-        <span class="hint">默认 Sheet：<b>same_result</b> · 先选择文件，再点"构建图谱"</span>
+        <span class="hint">默认 Sheet：<b>同品关系</b> · 先选择文件，再点"构建图谱"</span>
       </div>
       <div class="head-actions">
         <div class="head-actions__top">
@@ -34,6 +34,16 @@
       </div>
     </div>
     <div class="workspace">
+      <div class="history-confirm" id="historyConfirm" hidden>
+        <div class="history-confirm__dialog" role="alertdialog" aria-modal="true" aria-labelledby="historyConfirmTitle">
+          <h4 id="historyConfirmTitle">回溯确认</h4>
+          <p class="history-confirm__desc" id="historyConfirmDesc">确认回溯到该版本吗？</p>
+          <div class="history-confirm__actions">
+            <button type="button" class="history-version__restore" id="historyConfirmAccept">确认回溯</button>
+            <button type="button" class="history-version__restore history-version__restore--ghost" id="historyConfirmCancel">返回</button>
+          </div>
+        </div>
+      </div>
       <aside class="control-panel" id="controlPanel" aria-label="操作栏">
         <div class="card card--control panel-card" id="graphControlPanel">
           <section class="control-section control-section--load">
@@ -94,11 +104,32 @@
             </div>
             <div class="toolbar-grid toolbar-grid--single">
               <div class="cell cell--actions">
-                <div class="button-group button-group--wide">
+                <div class="button-group button-group--wide button-group--keepers">
                   <button type="button" class="keeper-btn" data-keeper="brand">品牌</button>
                   <button type="button" class="keeper-btn" data-keeper="power">功率</button>
                   <button type="button" class="keeper-btn" data-keeper="voltage">电压</button>
-                  <button type="button" class="keeper-btn" data-keeper="parentchild">父子</button>
+                  <div class="keeper-group">
+                    <button type="button" class="keeper-btn" data-keeper="parentchild">父子</button>
+                    <div class="score-dropdown">
+                      <button type="button" class="score-dropdown__toggle" id="scoreDropdownToggle" aria-haspopup="true" aria-expanded="false">
+                        <span class="score-dropdown__label">分数：100</span>
+                        <span class="score-dropdown__caret" aria-hidden="true"></span>
+                      </button>
+                      <div class="score-dropdown__menu" id="scoreDropdownMenu" hidden>
+                        <button type="button" data-score="100">100 分</button>
+                        <button type="button" data-score="90">90 分</button>
+                        <button type="button" data-score="70">70 分</button>
+                        <button type="button" data-score="50">50 分</button>
+                        <div class="score-dropdown__custom">
+                          <label for="scoreDropdownCustom">自定义分数</label>
+                          <div class="score-dropdown__custom-row">
+                            <input id="scoreDropdownCustom" type="number" min="0" max="999" placeholder="请输入"/>
+                            <button type="button" id="scoreDropdownApply">应用</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -182,11 +213,8 @@
             <div class="toolbar-grid toolbar-grid--single">
               <div class="cell cell--actions">
                 <div class="button-group button-group--wide">
-                  <button id="mergeExpandBtn">刷新吞并</button>
                   <button id="mergeResetBtn">视图复位</button>
                   <button id="mergeExportPng">导出 PNG</button>
-                  <button id="mergeGotoGraph">回到图谱</button>
-                  <button id="mergeCsvBtn">导出吞并CSV</button>
                 </div>
               </div>
             </div>
