@@ -87,17 +87,19 @@ const setStatus = (t)=>{ statusEl.textContent = t; console.log('[状态]', t); }
 function loadScriptChain(urls, test, onOk, onFail){
   let i=0; (function next(){
     if(i>=urls.length){ onFail&&onFail(); return; }
-    const s=document.createElement('script'); s.src=urls[i++]; s.async=true; s.referrerPolicy='no-referrer';
+    const s=document.createElement('script'); s.src=urls[i++]; s.async=false; s.referrerPolicy='no-referrer';
     s.onload=()=>{ try{ const ok = typeof test==='function'? test(): (window[test]!==undefined); if(ok){ onOk&&onOk(); } else { next(); } }catch{ next(); } };
     s.onerror=()=> next(); document.head.appendChild(s);
   })();
 }
 const VIS_URLS  = [
+  "./vendor/vis-network.min.js",
   "https://cdn.jsdelivr.net/npm/vis-network/standalone/umd/vis-network.min.js",
   "https://unpkg.com/vis-network/standalone/umd/vis-network.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.6/vis-network.min.js"
 ];
 const XLSX_URLS = [
+  "./vendor/xlsx.full.min.js",
   "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
   "https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"

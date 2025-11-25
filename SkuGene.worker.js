@@ -1,23 +1,15 @@
 /* -------------------- Worker：解析 + 数据切片 -------------------- */
 const workerSrc = `(() => {
   const XLSX_URLS = [
+    "./vendor/xlsx.full.min.js",
     "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
     "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
     "https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"
   ];
-  const CPEX_URLS = [
-    "./vendor/cpexcel.full.min.js",
-    "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/cpexcel.full.min.js",
-    "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/cpexcel.full.min.js",
-    "https://unpkg.com/xlsx@0.18.5/dist/cpexcel.full.min.js"
-  ];
   let xlsxLoaded=false;
   try{
     for(const u of XLSX_URLS){ try{ importScripts(u); xlsxLoaded=true; break; }catch{} }
-    if(xlsxLoaded){
-      let cpOK=false; for(const u of CPEX_URLS){ try{ importScripts(u); cpOK=true; break; }catch{} }
-      if(cpOK && self.cptable && self.XLSX?.set_cptable){ self.XLSX.set_cptable(self.cptable); }
-    }
+    /* cpexcel optional: skip to avoid errors */
   }catch{}
   self.postMessage({type:'ready', xlsx:xlsxLoaded});
 
@@ -82,10 +74,30 @@ const workerSrc = `(() => {
           }
           const rel =String(row[relIdx]||'').trim(); if(!code || !rel) continue;
           const nameCell=String(row[nameIdx]||'').trim();
+          const updateName=(targetId, candidate)=>{
+            if(!candidate || !targetId) return;
+            const targetNorm=String(targetId).replace(/\s+/g,'').toLowerCase();
+            const candNorm=String(candidate).replace(/\s+/g,'').toLowerCase();
+            if(!candNorm || targetNorm===candNorm) return; // 避免把编码当作名称
+            const existed=nameOf.get(targetId);
+            if(!existed || existed.length===0){
+              nameOf.set(targetId, candidate);
+              return;
+            }
+            // 仅当新名称更长且与编码不同才替换
+            const existNorm=String(existed).replace(/\s+/g,'').toLowerCase();
+            if(existNorm===targetNorm) {
+              nameOf.set(targetId, candidate);
+              return;
+            }
+            if(candidate.length > existed.length){
+              nameOf.set(targetId, candidate);
+            }
+          };
           if(rawPrimary){
-            if(nameCell && !nameOf.has(code)) nameOf.set(code,nameCell);
-          }else if(nameCell && !nameOf.has(rel)){
-            nameOf.set(rel, nameCell);
+            updateName(code, nameCell);
+          }else if(nameCell){
+            updateName(rel, nameCell);
           }
           const reasonLookup=new Map();
           if(reasonIdx!==-1){
@@ -157,12 +169,20 @@ const workerSrc = `(() => {
         const compList = Array.from(comps.entries()).map(([cid,set])=>({cid,size:set.size})).sort((a,b)=>b.size-a.size);
 
         self.state = { comps, compOf, edgesGlobal:edgesSet, nameOf, adj, parsed:true, reasons:reasonMap };
+        // 轻量 state dump（供主线程虚拟剔品/吞并链路使用）
+        const stateDump={
+          comps:Array.from(comps.entries()).map(([cid,set])=>[cid, Array.from(set)]),
+          nameOf:Array.from(nameOf.entries()),
+          adj:Array.from(adj.entries()).map(([id,set])=>[id, Array.from(set)]),
+          edgesByComp:Array.from(edgesByComp.entries())
+        };
         self.postMessage({ type:'summary',
           comps: compList, totalNodes: ids.size, totalEdges: edgesSet.size,
           degreeMax: degMax, degreeP95: degP95,
           edgesByComp: Array.from(edgesByComp.entries()).map(([cid,count])=>({cid,count})),
           rawRows: rows,
-          codeIndex: codeIdx
+          codeIndex: codeIdx,
+          stateDump
         });
       }catch(err){ self.postMessage({type:'error', message:'parse_fail:'+err.message}); }
     } else if(type==='getComponent'){

@@ -251,7 +251,7 @@ function removeNode(nodeId, {recordUndo=true}={}){
   updateStats(); updateETA(); ensurePhysicsOn();
   return true;
 }
-function removeEdgesBetweenNodes(nidA, nidB, {recordUndo=true}={}){
+function removeEdgesBetweenNodes(nidA, nidB, {recordUndo=true, skipRelationSync=false}={}){
   if(!nidA || !nidB || !edgesDS) return false;
   if(!nidA.startsWith('N:') || !nidB.startsWith('N:')) return false;
   const edges=edgesDS.get({ filter:e=> (e.from===nidA && e.to===nidB) || (e.from===nidB && e.to===nidA) }) || [];
@@ -272,7 +272,7 @@ function removeEdgesBetweenNodes(nidA, nidB, {recordUndo=true}={}){
   updateStats(); updateETA(); ensurePhysicsOn();
   const codeA=typeof stripNodePrefix==='function' ? stripNodePrefix(nidA) : String(nidA||'').replace(/^N:/,'').trim();
   const codeB=typeof stripNodePrefix==='function' ? stripNodePrefix(nidB) : String(nidB||'').replace(/^N:/,'').trim();
-  if(codeA && codeB && typeof handleRelationRemovalBetweenCodes==='function'){
+  if(!skipRelationSync && codeA && codeB && typeof handleRelationRemovalBetweenCodes==='function'){
     try{ handleRelationRemovalBetweenCodes(codeA, codeB); }catch(err){}
   }
   return true;
@@ -544,6 +544,16 @@ function flushNetworkDatasets({ fit=true }={}){
   }
 }
 
+function flushGraphDatasets({ fit=false }={}){
+  try{ nodesDS?.flush?.(); }catch(err){}
+  try{ edgesDS?.flush?.(); }catch(err){}
+  if(fit){
+    try{ network?.fit?.({ animation:false }); }catch(err){}
+  }else{
+    try{ network?.redraw?.(); }catch(err){}
+  }
+}
+
 function exportPNG(){
   if(!network?.canvas?.frame) return; const canvas=network.canvas.frame.canvas; const url=canvas.toDataURL('image/png');
   const a=document.createElement('a'); a.href=url; a.download='同品关系图.png'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
@@ -576,9 +586,13 @@ async function autoPruneUnstableNodes(){
   let totalRemoved = 0;
   groupPruneInProgress.clear();
   const prevRecords = new Map(groupPruneRecords);
+  const prevMergeRecords = new Map(mergePruneRecords);
   const prevDetails = new Map(groupPruneDetails);
+  const prevMergeDetails = new Map(mergePruneDetails);
   groupPruneRecords.clear();
+  mergePruneRecords.clear();
   groupPruneDetails.clear();
+  mergePruneDetails.clear();
   try{
     setStatus('自动剔品处理中...');
     const comps = fullSummary.comps.slice().sort((a,b)=> (b.size||0)-(a.size||0));
@@ -636,9 +650,13 @@ async function autoUltimatePruneNodes(){
   let totalRemoved = 0;
   groupPruneInProgress.clear();
   const prevRecords = new Map(groupPruneRecords);
+  const prevMergeRecords = new Map(mergePruneRecords);
   const prevDetails = new Map(groupPruneDetails);
+  const prevMergeDetails = new Map(mergePruneDetails);
   groupPruneRecords.clear();
+  mergePruneRecords.clear();
   groupPruneDetails.clear();
+  mergePruneDetails.clear();
   try{
     setStatus('究极剔品处理中...');
     const comps = fullSummary.comps.slice().sort((a,b)=> (b.size||0)-(a.size||0));
@@ -646,7 +664,7 @@ async function autoUltimatePruneNodes(){
       const cidKey = String(comp?.cid ?? '');
       if(!cidKey) continue;
       try{
-        const removed = await recommendPruneForGroup(cidKey, { skipAutoGuard:true, suppressMergeRefresh:true, ultimate:true });
+        const removed = await recommendPruneForGroup(cidKey, { skipAutoGuard:true, ultimate:true, target:'merge' });
         if(Number.isFinite(removed)) totalRemoved += removed;
       }catch(err){
         console.warn('究极剔品处理组件失败', cidKey, err);
@@ -684,6 +702,10 @@ async function autoUltimatePruneNodes(){
 
 const groupPruneRecords = new Map();
 if(typeof globalThis!=='undefined'){ globalThis.groupPruneRecords = groupPruneRecords; }
+const mergePruneRecords = new Map();
+if(typeof globalThis!=='undefined'){ globalThis.mergePruneRecords = mergePruneRecords; }
+const mergePruneDetails = new Map();
+if(typeof globalThis!=='undefined'){ globalThis.mergePruneDetails = mergePruneDetails; }
 const groupPruneInProgress = new Set();
 
 function isGroupPruned(cid){
@@ -725,14 +747,13 @@ function ensureComponentNodesReady(cid, onReady, onFail){
 
 function captureUndoEntryForNode(nid, mergedBy=null){
   const ok = removeNode(nid, {recordUndo:true});
-   if(!ok) return null;
-
+  if(!ok) return null;
   const entry = undoStack.pop(); // 取出刚刚 push 的删除记录
   if(entry && mergedBy){
     // 记录“被谁吞并”
     entry.mergedBy = mergedBy;
   }
-   return entry;
+  return entry;
 }
 
 
@@ -750,6 +771,7 @@ function pruneComponentNodes(cid, { preferred, ultimate=false } = {}){
   const pruneDetails = []; // 记录剔品详情
   let safety = 0;
   while(true){
+    flushGraphDatasets({ fit:false });
     const { adjacency, order } = buildAdjacencySnapshot(id => componentIdOfNode(id) === key);
     if(order.length === 0) break;
     let removedInPass = false;
@@ -772,14 +794,14 @@ function pruneComponentNodes(cid, { preferred, ultimate=false } = {}){
           neighbors: neighborInfo
         });
         
-                // 先挑一个“吞并者”（若没有“最有可能”，从 neighbors 随机一个；若空邻居则为 null）
+        // 先挑一个“吞并者”（若没有“最有可能”，从 neighbors 随机一个；若空邻居则为 null）
         const mergedBy = pickMergerForNode(nid, neighbors, adjacency, preferredMergers);
         if(mergedBy){ preferredMergers.add(mergedBy); }
         const entry = captureUndoEntryForNode(nid, mergedBy);
-
         if(entry){
           removedEntries.push(entry);
           removedInPass = true;
+          flushGraphDatasets({ fit:false });
         }
         break;
       }
@@ -793,13 +815,123 @@ function pruneComponentNodes(cid, { preferred, ultimate=false } = {}){
   return { entries: removedEntries, details: pruneDetails, preferred: preferredMergers };
 }
 
+// 仅用于吞并视图的纯计算，不触碰图谱 DS
+function pruneComponentNodesVirtual(cid, { preferred, ultimate=true } = {}){
+  const keyRaw = String(cid);
+  const compMap = MT_ctx?.comps instanceof Map ? MT_ctx.comps : null;
+  let compSet = compMap ? compMap.get(keyRaw) : null;
+  if(!compSet && compMap){
+    const numKey=Number(keyRaw);
+    if(!Number.isNaN(numKey)) compSet = compMap.get(numKey);
+  }
+  const adjGlobal = MT_ctx?.adj instanceof Map ? MT_ctx.adj : null;
+  if(!compSet || !adjGlobal) return { entries:[], details:[], preferred:new Set() };
+  const preferredMergers = preferred || new Set();
+  const nodes = Array.from(compSet).map(id=> String(id));
+  const adjacency=new Map();
+  nodes.forEach(id=>{
+    const set = adjGlobal.get(id) || new Set();
+    const filtered = Array.from(set).map(String).filter(n=> compSet.has(n));
+    adjacency.set(id, new Set(filtered));
+  });
+  const removedEntries=[];
+  const pruneDetails=[];
+  let safety=0;
+  while(adjacency.size){
+    const order=Array.from(adjacency.keys());
+    let removed=false;
+    for(const nid of order){
+      const neighbors=Array.from(adjacency.get(nid) || []);
+      const stable=isStableNeighborClique(neighbors, adjacency);
+      if(stable && (!ultimate || neighbors.length===0)) continue;
+      const nodeId = nid;
+      const neighborInfo = neighbors.map(n=>{
+        const id = n;
+        const name = MT_ctx?.nameOf?.get(id) || '';
+        return { id, name };
+      });
+      pruneDetails.push({ nodeId, nodeName: MT_ctx?.nameOf?.get(nodeId)||'', neighbors: neighborInfo });
+      const mergedBy = pickMergerForNode(nid, neighbors, adjacency, preferredMergers);
+      if(mergedBy){ preferredMergers.add(mergedBy); }
+      removedEntries.push({ type:'node', node:{ id:nid }, edges:[], cid:keyRaw, cidsByEdge:{}, mergedBy });
+      adjacency.delete(nid);
+      neighbors.forEach(n=>{
+        const set=adjacency.get(n);
+        if(set){ set.delete(nid); }
+      });
+      removed=true;
+      break;
+    }
+    if(!removed) break;
+    if(++safety>5000){ break; }
+  }
+  return { entries:removedEntries, details:pruneDetails, preferred:preferredMergers };
+}
+
+// 生成吞并视图的简单链路（不依赖图谱 DS）
+function buildMergeRecordsForComponent(cid){
+  const key=String(cid);
+  const compMap = MT_ctx?.comps instanceof Map ? MT_ctx.comps : null;
+  let compSet = compMap ? compMap.get(key) : null;
+  if(!compSet && compMap){
+    const numKey=Number(key);
+    if(!Number.isNaN(numKey)) compSet = compMap.get(numKey);
+  }
+  if(!compSet || !compSet.size) return { entries:[], details:[] };
+  const nodes=Array.from(compSet).map(String);
+  const survivor = nodes[0];
+  const victims = nodes.slice(1);
+  const entries=[];
+  const details=[];
+  victims.forEach(v=>{
+    entries.push({
+      type:'node',
+      node:{ id:'N:'+v },
+      edges:[],
+      cid:key,
+      cidsByEdge:{},
+      mergedBy:'N:'+survivor
+    });
+    details.push({
+      nodeId:v,
+      nodeName:MT_ctx?.nameOf?.get(v)||'',
+      neighbors: surviorNeighborsList(survivor,v)
+    });
+  });
+  return { entries, details };
+}
+
+function surviorNeighborsList(survivor,victim){
+  try{
+    const adj=MT_ctx?.adj;
+    const set=adj?.get?.(victim) || adj?.get?.('N:'+victim) || new Set();
+    return Array.from(set).map(n=>({ id:String(n), name:MT_ctx?.nameOf?.get(String(n))||'' }));
+  }catch(err){ return []; }
+}
+
 function recommendPruneForGroup(cid, opts){
   const key = String(cid);
-  const { skipAutoGuard=false, suppressMergeRefresh=false, ultimate=false } = opts || {};
+  const { skipAutoGuard=false, ultimate=false, target='graph' } = opts || {};
   const modeLabel = ultimate ? '究极剔品' : '剔品';
   return new Promise((resolve, reject)=>{
     if(_autoPruneRunning && !skipAutoGuard){
       reject(new Error('自动剔品正在执行，请稍后再试'));
+      return;
+    }
+    if(target==='merge'){
+      const { entries, details } = buildMergeRecordsForComponent(key);
+      if(entries.length){
+        mergePruneRecords.set(key, entries);
+        mergePruneDetails.set(key, Array.isArray(details)? details: []);
+      }else{
+        mergePruneRecords.delete(key);
+        mergePruneDetails.delete(key);
+      }
+      try{
+        triggerMergeGraphRefresh({ keepPositions:true, fit:entries.length>0 });
+        if(typeof rebuildMergeTableFromRecords==='function'){ rebuildMergeTableFromRecords(); }
+      }catch(err){ console.warn('刷新吞并视图失败', err); }
+      resolve(entries.length);
       return;
     }
     if(groupPruneInProgress.has(key)){
@@ -825,18 +957,26 @@ function recommendPruneForGroup(cid, opts){
           if(aggregateDetails.length) groupPruneDetails.set(key, aggregateDetails);
           else groupPruneDetails.delete(key);
           setStatus(`组件 ${key} ${modeLabel}完成，删除 ${aggregateEntries.length} 个节点`);
-          if(ultimate && typeof syncTableRowsAfterUltimate==='function'){
-            try{ syncTableRowsAfterUltimate({ cid:key, entries:aggregateEntries }); }catch(err){ console.warn('syncTableRowsAfterUltimate failed', err); }
-          }
         }else{
           groupPruneRecords.delete(key);
           groupPruneDetails.delete(key);
           setStatus(`组件 ${key} 暂无需${modeLabel}`);
         }
-        if(!suppressMergeRefresh){
-          triggerMergeGraphRefresh({ keepPositions:true, fit:aggregateEntries.length>0 });
-        }
         flushNetworkDatasets({ fit: aggregateEntries.length>0 });
+        try{
+          // 图谱剔品后也同步一份只读副本到 merge 侧，便于吞并表/视图更新
+          const cloned = aggregateEntries.map(e=>({
+            type:e.type,
+            node:e.node? { ...e.node }:null,
+            edges:Array.isArray(e.edges)? e.edges.map(ed=>({...ed})):[],
+            cid:e.cid,
+            cidsByEdge:e.cidsByEdge? JSON.parse(JSON.stringify(e.cidsByEdge)) : {},
+            mergedBy:e.mergedBy
+          }));
+          mergePruneRecords.set(key, cloned);
+          triggerMergeGraphRefresh({ keepPositions:true, fit:aggregateEntries.length>0 });
+          if(typeof rebuildMergeTableFromRecords==='function'){ rebuildMergeTableFromRecords(); }
+        }catch(err){ console.warn('同步吞并副本失败', err); }
         groupPruneInProgress.delete(key);
         resolve(aggregateEntries.length);
       }catch(err){
@@ -852,8 +992,44 @@ function recommendPruneForGroup(cid, opts){
   });
 }
 
+function restoreGraphAfterPruneEntries(entries){
+  if(!Array.isArray(entries) || !entries.length) return;
+  for(let i=entries.length-1;i>=0;i--){
+    const entry=entries[i];
+    if(!entry) continue;
+    if(entry.type==='node'){
+      const {node, edges=[], cid, cidsByEdge={}} = entry;
+      if(node){
+        deletedNodes.delete(node.id);
+        nodesDS.add(node);
+        if(cid){
+          const st=expandedState.get(cid);
+          if(st){ st.nodeToCid?.set(node.id, cid); if(node.id.startsWith('N:')) st.nodes?.add(node.id); if(node.id.startsWith('P:')) st.prefixClusters?.add(node.id); }
+        }
+      }
+      for(const e of edges){
+        edgesDS.add(e);
+        if(e.from.startsWith('N:') && e.to.startsWith('N:')){ deletedEdges.delete(canonicalEdgeKey(e.from,e.to)); }
+        const list=cidsByEdge[e.id];
+        if(list){ for(const cidKey of list){ const st=expandedState.get(cidKey); if(st){ st.edges?.add(e.id); } } }
+      }
+    }else if(entry.type==='edges'){
+      const {edges=[], nodes=[], cidsByEdge={}} = entry;
+      for(const e of edges){
+        edgesDS.add(e);
+        if(e.from.startsWith('N:') && e.to.startsWith('N:')){ deletedEdges.delete(canonicalEdgeKey(e.from,e.to)); }
+        const list=cidsByEdge[e.id];
+        if(list){ for(const cidKey of list){ const st=expandedState.get(cidKey); if(st){ st.edges?.add(e.id); } } }
+      }
+      if(nodes.length===2){ deletedEdges.delete(canonicalEdgeKey(nodes[0], nodes[1])); }
+    }
+  }
+  updateStats(); updateETA(); ensurePhysicsOn();
+}
+
 function ultimatePruneForGroup(cid){
-  return recommendPruneForGroup(cid, { ultimate:true });
+  // 对吞并视图：只计算，不改图谱
+  return recommendPruneForGroup(cid, { ultimate:true, target:'merge' });
 }
 
 function undoPruneForGroup(cid){
@@ -871,6 +1047,7 @@ function undoPruneForGroup(cid){
         undoLast();
       }
       groupPruneRecords.delete(key);
+      mergePruneRecords.delete(key);
       groupPruneDetails.delete(key); // 清除详情记录
       if(typeof restoreTableRowsAfterUltimate==='function'){
         try{ restoreTableRowsAfterUltimate({ cid:key, entries:record }); }catch(err){ console.warn('restoreTableRowsAfterUltimate failed', err); }
@@ -897,7 +1074,7 @@ function showPruneDetails(cid){
     : '';
 
 
-  const details = groupPruneDetails.get(String(cid));
+  const details = groupPruneDetails.get(String(cid)) || mergePruneDetails.get(String(cid));
   if(!details || !details.length){
     alert('暂无剔品详情记录');
     return;
@@ -938,6 +1115,7 @@ function showPruneDetails(cid){
 }
 
 function buildAdjacencySnapshot(filterFn){
+  flushGraphDatasets({ fit:false });
   const adjacency = new Map();
   const predicate = typeof filterFn === 'function' ? filterFn : null;
   const nodes = nodesDS?.get({ filter: item => item.id?.startsWith('N:') }) || [];
@@ -1008,6 +1186,9 @@ function pickMergerForNode(nid, neighbors, adjacency, preferredSet){
   return best || neighbors[Math.floor(Math.random()*neighbors.length)];
 }
 
+// 虚拟剔品功能已移除，保留空函数占位以防调用异常
+function pruneComponentNodesVirtual(){ return { entries:[], details:[], preferred:new Set() }; }
+
 
 
 
@@ -1034,11 +1215,14 @@ function resetAll(){
   closeConfirmedPanel();
   confirmedGroups.clear();
   groupPruneRecords.clear();
+  mergePruneRecords.clear();
+  mergePruneDetails.clear();
   groupPruneInProgress.clear();
   groupPruneDetails.clear(); // 清除剔品详情
   renderGroupList();
   updateStats();
   updateLegends();
+  flushGraphDatasets({ fit:false });
   if(typeof setRawDataRows === 'function'){
     try{ setRawDataRows([]); }catch(err){ console.warn('reset table failed', err); }
   }

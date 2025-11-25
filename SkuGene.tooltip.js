@@ -9,7 +9,7 @@ const tipActionsEl=document.getElementById('tipActions');
 const toggleReasonBtn=document.getElementById('toggleReason');
 const tipAutoPruneBtn=document.getElementById('autoPruneNode');
 const tipDeleteBtn=document.getElementById('deleteNode');
-if(tipDeleteBtn){ tipDeleteBtn.disabled=true; }
+if(tipDeleteBtn){ tipDeleteBtn.style.display='none'; }
 if(tipAutoPruneBtn){ tipAutoPruneBtn.disabled=true; }
 let tipShowReason=false;
 let tipData=null;
@@ -52,7 +52,7 @@ function updateReasonToggle(){
     tipActionsEl.style.display='none';
     if(toggleReasonBtn){ toggleReasonBtn.style.display='none'; toggleReasonBtn.classList.remove('active'); }
     if(tipAutoPruneBtn){ tipAutoPruneBtn.style.display='none'; tipAutoPruneBtn.disabled=true; tipAutoPruneBtn.removeAttribute('data-cid'); }
-    if(tipDeleteBtn){ tipDeleteBtn.disabled=true; tipDeleteBtn.removeAttribute('data-target'); }
+    if(tipDeleteBtn){ tipDeleteBtn.style.display='none'; tipDeleteBtn.disabled=true; tipDeleteBtn.removeAttribute('data-target'); }
     return;
   }
   const neighbors=Array.isArray(tipData?.neighbors)? tipData.neighbors : [];
@@ -69,7 +69,8 @@ function updateReasonToggle(){
     }
   }
   if(tipDeleteBtn){
-    tipDeleteBtn.disabled = !tipData;
+    tipDeleteBtn.style.display='none';
+    tipDeleteBtn.disabled=true;
   }
   if(tipAutoPruneBtn){
     let cid=null;
@@ -90,8 +91,7 @@ function updateReasonToggle(){
     }
   }
   const actionsVisible = (toggleReasonBtn && toggleReasonBtn.style.display!=='none') ||
-    (tipAutoPruneBtn && tipAutoPruneBtn.style.display!=='none') ||
-    (tipDeleteBtn && !tipDeleteBtn.disabled);
+    (tipAutoPruneBtn && tipAutoPruneBtn.style.display!=='none');
   tipActionsEl.style.display = actionsVisible? 'flex':'none';
 }
 function renderTipList(){
@@ -200,13 +200,7 @@ if(toggleReasonBtn){
     renderTipList();
   });
 }
-if(tipDeleteBtn){
-  tipDeleteBtn.addEventListener('click', ()=>{
-    if(!tipData) return;
-    const target=tipDeleteBtn.dataset.target || ('N:'+tipData.id);
-    removeNode(target);
-  });
-}
+// 删除节点功能已禁用：删除按钮被隐藏
 if(tipAutoPruneBtn){
   tipAutoPruneBtn.addEventListener('click', async ()=>{
     const cid = tipAutoPruneBtn.dataset.cid;

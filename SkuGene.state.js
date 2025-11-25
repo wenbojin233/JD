@@ -18,6 +18,12 @@ let DEGREE_CAP=0, DEGREE_MAX=0, GROUP_CAP=0, GROUP_MAX=0, GROUP_CAP_ALL=0, GROUP
 let EDGES_PER_COMP=new Map();
 const GROUP_LABEL_LIMIT=300;
 const FULL_NODE_LIMIT=1200;
+const PRO_SHEET_NAME='剔品同品组专业';
+const PRO_EXPORT_PARAM='prosheet';
+const PRO_BUFFER_KEY='skgene_last_upload_b64';
+const urlParams = (typeof window!=='undefined' && window.location && window.location.search) ? new URLSearchParams(window.location.search) : null;
+const PRO_EXPORT_MODE = !!(urlParams && urlParams.get(PRO_EXPORT_PARAM)==='1');
+if(typeof globalThis!=='undefined'){ globalThis.PRO_EXPORT_MODE = PRO_EXPORT_MODE; }
 let edgeDeleteBtn=null;
 let hoveredEdgeId=null;
 let edgeDeleteHideTimer=null;
@@ -41,7 +47,7 @@ if(typeof globalThis!=='undefined'){ globalThis.MT_ctx = MT_ctx; }
 
 const VIEW_GRAPH='graph';
 const VIEW_MERGE='merge';
-let activeView=VIEW_GRAPH;
+let activeView=PRO_EXPORT_MODE ? VIEW_MERGE : VIEW_GRAPH;
 let mergeGraphCache={ groups:[], stats:{ components:0, victims:0, edges:0, nodes:0 } };
 
 function readCssVar(name, fallback){
@@ -55,6 +61,7 @@ function readCssVar(name, fallback){
 }
 
 function preferredSheetName(){
+  if(FORCE_SHEET_NAME && String(FORCE_SHEET_NAME).trim()) return String(FORCE_SHEET_NAME).trim();
   const fileInput = document.getElementById('file');
   if(fileInput){
     const datasetSheet = fileInput.dataset?.sheetPreferred || fileInput.dataset?.sheet;
@@ -63,6 +70,36 @@ function preferredSheetName(){
     if(attr && attr.trim()) return attr.trim();
   }
   return DEFAULT_SHEET_NAME;
+}
+
+function bufferToBase64(buffer){
+  if(!buffer) return '';
+  const bytes=new Uint8Array(buffer);
+  let binary='';
+  for(let i=0;i<bytes.length;i++){ binary+=String.fromCharCode(bytes[i]); }
+  return btoa(binary);
+}
+function base64ToArrayBuffer(base64){
+  const binary=atob(base64||'');
+  const len=binary.length;
+  const bytes=new Uint8Array(len);
+  for(let i=0;i<len;i++){ bytes[i]=binary.charCodeAt(i); }
+  return bytes.buffer;
+}
+
+function bufferToBase64(buffer){
+  if(!buffer) return '';
+  const bytes=new Uint8Array(buffer);
+  let binary='';
+  for(let i=0;i<bytes.length;i++){ binary+=String.fromCharCode(bytes[i]); }
+  return btoa(binary);
+}
+function base64ToArrayBuffer(base64){
+  const binary=atob(base64||'');
+  const len=binary.length;
+  const bytes=new Uint8Array(len);
+  for(let i=0;i<len;i++){ bytes[i]=binary.charCodeAt(i); }
+  return bytes.buffer;
 }
 
 
@@ -90,6 +127,153 @@ const mergePanelStats = {
   edges: document.getElementById('mergeStatEdges'),
   nodes: document.getElementById('mergeStatNodes')
 };
+let aiAvailable=true;
+const applyAiAvailability=()=>{
+  const btn=document.getElementById('mergeAiButton');
+  if(!btn) return;
+  const disabled = !aiAvailable;
+  btn.disabled = disabled;
+  btn.classList.toggle('is-disabled', disabled);
+};
+const publishBtn=document.getElementById('publishBtn');
+const publishBtnHeader=document.getElementById('publishBtnHeader');
+let mergeProData=null;
+let mergeProMode=false;
+let FORCE_SHEET_NAME=null;
+let lastUploadBuffer=null;
+// cpexcel 可选，默认不再强制加载（避免报错）
+(function preloadCpexcel(){})();
+
+// 预加载本地 XLSX，避免多次远程拉取导致等待
+(function preloadXlsx(){
+  if(typeof document==='undefined') return;
+  if(typeof window.XLSX!=='undefined') return;
+  const existed=document.querySelector('script[data-skgene-xlsx]');
+  if(existed) return;
+  const script=document.createElement('script');
+  script.src='vendor/xlsx.full.min.js';
+  script.setAttribute('data-skgene-xlsx','1');
+  script.defer=true;
+  document.head.appendChild(script);
+})();
+
+// 保证 XLSX 可用（本地优先，失败回退 CDN）
+function ensureXlsxReady(){
+  if(typeof window==='undefined') return Promise.resolve();
+  if(window.XLSX) return Promise.resolve();
+  return new Promise(resolve=>{
+    const done=()=>resolve();
+    const loadScript=(src, attr)=>{
+      const s=document.createElement('script');
+      s.src=src; s.defer=true;
+      if(attr){ Object.keys(attr).forEach(k=> s.setAttribute(k, attr[k])); }
+      s.onload=done;
+      s.onerror=done;
+      document.head.appendChild(s);
+    };
+    const existed=document.querySelector('script[data-skgene-xlsx]');
+    if(existed){
+      existed.addEventListener('load', done, { once:true });
+      existed.addEventListener('error', done, { once:true });
+      return;
+    }
+    loadScript('vendor/xlsx.full.min.js', { 'data-skgene-xlsx':'1' });
+    setTimeout(()=>{
+      if(window.XLSX) return;
+      const cdn=document.querySelector('script[data-skgene-xlsx-cdn]');
+      if(cdn) return;
+      loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', { 'data-skgene-xlsx-cdn':'1' });
+    }, 1000);
+  });
+}
+if(typeof window!=='undefined'){ window.ensureXlsxReady = ensureXlsxReady; }
+
+function waitVisReady(timeoutMs=8000){
+  const start=Date.now();
+  return new Promise((resolve,reject)=>{
+    const tick=()=>{
+      if(typeof vis!=='undefined' && vis?.Network){
+        resolve();
+        return;
+      }
+      if(Date.now()-start > timeoutMs){
+        reject(new Error('vis 未就绪'));
+        return;
+      }
+      setTimeout(tick, 80);
+    };
+    tick();
+  });
+}
+if(typeof window!=='undefined'){ window.waitVisReady = waitVisReady; }
+
+function loadProSheetView(buffer){
+  if(!buffer){ alert('缺少数据'); return; }
+  Promise.all([ensureXlsxReady(), waitVisReady().catch(()=>{})]).then(()=>{
+    try{
+      const wb=XLSX.read(new Uint8Array(buffer), { type:'array' });
+      const sheetName = (()=> {
+        const target = PRO_SHEET_NAME.trim();
+        const exact = wb.SheetNames.find(n=> String(n||'').trim()===target);
+        if(exact) return exact;
+        const lower = target.toLowerCase();
+        const fuzzy = wb.SheetNames.find(n=> String(n||'').trim().toLowerCase()===lower);
+        return fuzzy || wb.SheetNames[0];
+      })();
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:'' });
+      parseProSheetToMerge(rows);
+    }catch(err){
+      console.error('prosheet 解析失败', err);
+      alert('解析专用 Sheet 失败：'+(err?.message||err));
+    }
+  });
+}
+if(typeof window!=='undefined'){ window.loadProSheetView = loadProSheetView; }
+
+const autosaveIndicator = document.getElementById('autosaveIndicator');
+const autosaveIndicatorText = document.getElementById('autosaveIndicatorText');
+let autosaveTimer=null;
+function updateAutosaveIndicator(state,label){
+  const next = state==='saving'? 'saving':'saved';
+  if(autosaveIndicator){ autosaveIndicator.dataset.state = next; }
+  if(autosaveIndicatorText){
+    autosaveIndicatorText.textContent = label || (next==='saving'? '保存中…' : '已保存');
+  }
+}
+function markAutosaveDirty(options){
+  const opts=options||{};
+  if(autosaveTimer){ clearTimeout(autosaveTimer); autosaveTimer=null; }
+  updateAutosaveIndicator('saving', opts.label);
+  if(!opts.sticky){
+    const delay=Number.isFinite(opts.holdMs)? opts.holdMs : 1400;
+    autosaveTimer=setTimeout(()=> updateAutosaveIndicator('saved'), delay);
+  }
+}
+function markAutosaveSaved(label){
+  if(autosaveTimer){ clearTimeout(autosaveTimer); autosaveTimer=null; }
+  updateAutosaveIndicator('saved', label);
+}
+updateAutosaveIndicator('saved');
+if(typeof window!=='undefined'){
+  window.markAutosaveDirty = markAutosaveDirty;
+  window.markAutosaveSaved = markAutosaveSaved;
+}
+function handlePublish(){
+  alert('已发布');
+}
+
+if(typeof document!=='undefined' && PRO_EXPORT_MODE){
+  try{ document.body.classList.add('prosheet-mode'); }catch(err){}
+}
+['input','change'].forEach(evt=>{
+  document.addEventListener(evt, ()=> markAutosaveDirty(), { capture:true });
+});
+document.addEventListener('click', (ev)=>{
+  const target=ev.target instanceof Element ? ev.target : null;
+  if(target && target.closest('button, input, select, textarea')){
+    markAutosaveDirty();
+  }
+}, { capture:true });
 const historyToggle = document.getElementById('historyToggle');
 const historyPanel = document.getElementById('historyPanel');
 const historyList = document.getElementById('historyList');
@@ -97,11 +281,26 @@ const historyConfirm = document.getElementById('historyConfirm');
 const historyConfirmDesc = document.getElementById('historyConfirmDesc');
 const historyConfirmAccept = document.getElementById('historyConfirmAccept');
 const historyConfirmCancel = document.getElementById('historyConfirmCancel');
+const aiConfirm = document.getElementById('aiConfirm');
+const aiConfirmDesc = document.getElementById('aiConfirmDesc');
+const aiConfirmAccept = document.getElementById('aiConfirmAccept');
+const aiConfirmCancel = document.getElementById('aiConfirmCancel');
+const aiProgress = document.getElementById('aiProgress');
+const aiProgressTitle = document.getElementById('aiProgressTitle');
+const aiProgressDesc = document.getElementById('aiProgressDesc');
+const aiProgressBar = document.getElementById('aiProgressBar');
+const aiProgressValue = document.getElementById('aiProgressValue');
+const aiProgressGoto = document.getElementById('aiProgressGoto');
+  if(publishBtnHeader && PRO_EXPORT_MODE){
+    publishBtnHeader.addEventListener('click', ()=>{
+      handlePublish();
+    });
+  }
 const mergeSearchInput = document.getElementById('mergeSearch');
 const mergeLocateBtn = document.getElementById('mergeLocate');
 const mergeRefreshStatsBtn = document.getElementById('mergeRefreshStats');
 const mergeResetBtn = document.getElementById('mergeResetBtn');
-const mergeExportPngBtn = document.getElementById('mergeExportPng');
+const mergeExportExcelBtn = document.getElementById('mergeExportExcel');
 const mergeNodeLimitInput = document.getElementById('mergeNodeLimit');
 const mergeNodeLimitLabel = document.getElementById('mergeNodeLimitLabel');
 const mergeEdgeLimitInput = document.getElementById('mergeEdgeLimit');
@@ -188,6 +387,8 @@ function syncMergePanelStats(stats, renderedCount){
     edges:safe(stats?.edges),
     nodes:safe(renderedCount ?? stats?.nodes)
   };
+  aiAvailable = (resolved.nodes>0) || (resolved.edges>0) || (resolved.victims>0);
+  applyAiAvailability();
   Object.entries(mergePanelStats).forEach(([key,el])=>{
     if(!el) return;
     el.textContent = resolved[key] ?? 0;
@@ -297,8 +498,9 @@ function formatNodeLabel(id, name, extra){
 }
 
 function buildMergeGraphData(){
-  const records = (typeof globalThis!=='undefined' && globalThis.groupPruneRecords instanceof Map)
-    ? globalThis.groupPruneRecords : null;
+  const records = (typeof globalThis!=='undefined' && globalThis.mergePruneRecords instanceof Map)
+    ? globalThis.mergePruneRecords
+    : ((typeof globalThis!=='undefined' && globalThis.groupPruneRecords instanceof Map) ? globalThis.groupPruneRecords : null);
   const groups=[];
   let totalNodes=0, totalVictims=0, totalEdges=0;
   if(records){
@@ -905,6 +1107,24 @@ if(typeof window!=='undefined'){
   window.exportMergeCSV = exportMergeCSV;
 }
 
+async function buildFromBuffer(buffer, sheetName){
+  if(!buffer){ alert('缺少数据'); return; }
+  if(sheetName){ FORCE_SHEET_NAME = sheetName; }
+  await ensureXlsxReady();
+  resetAll(); setProgress(0,'解析文件…'); setStatus('正在主线程解析…');
+  try{
+    const sum=parseOnMainThread(buffer, preferredSheetName());
+    onSummary(sum);
+    try{ cacheProSheet(buffer); }catch(err){}
+  }catch(err){
+    alert('解析失败：'+(err?.message||err));
+    setStatus('解析失败');
+  }finally{
+    FORCE_SHEET_NAME=null;
+  }
+}
+if(typeof window!=='undefined'){ window.buildFromBuffer = buildFromBuffer; window.lastUploadBuffer = lastUploadBuffer; }
+
 function ensureMergeNetwork(){
   if(mergeNetwork || typeof vis==='undefined' || !vis?.Network) return;
   mergeNetworkContainer=document.getElementById('mergeNetwork');
@@ -921,12 +1141,12 @@ function ensureMergeNetwork(){
     physics:{
       enabled:true,
       solver:'forceAtlas2Based',
-      forceAtlas2Based:{ gravitationalConstant:-32, centralGravity:0.02, springLength:120, springConstant:0.045, damping:0.38, avoidOverlap:0.8 },
+      forceAtlas2Based:{ gravitationalConstant:-26, centralGravity:0.06, springLength:140, springConstant:0.06, damping:0.52, avoidOverlap:0.9 },
       stabilization:{ enabled:false },
-      minVelocity:0.16
+      minVelocity:0.02
     },
-    nodes:{ shape:'dot', size:9, font:{ color:palette.font||'#0f172a', size:12, face:fontFace }, borderWidth:1 },
-    edges:{ color:{ color:palette.edge||'#94a3b8', highlight:palette.edge||'#94a3b8' }, smooth:false, width:1 },
+    nodes:{ shape:'dot', size:9, font:{ color:'#111827', size:12, face:fontFace }, borderWidth:1 },
+    edges:{ color:{ color:palette.edge||'#94a3b8', highlight:palette.edge||'#94a3b8' }, smooth:{ type:'dynamic', roundness:0.2 }, width:1 },
     interaction:{ hover:true, tooltipDelay:0, zoomView:true, dragNodes:true, dragView:true }
   });
   applyMergePhysics();
@@ -934,9 +1154,13 @@ function ensureMergeNetwork(){
   mergeNetwork.on('click',(params)=>{
     if(params?.nodes?.length){
       const parsed=parseMergeVisId(params.nodes[0]);
-      if(parsed?.nodeId && typeof highlightRawTableRow==='function'){
+      if(parsed?.nodeId){
         const code=stripNodePrefix(parsed.nodeId);
-        highlightRawTableRow(code, { scroll:true, view:'merge' });
+        if(typeof highlightRawTableRow==='function'){
+          highlightRawTableRow(code, { scroll:true, view:'merge', table:'merge' });
+        }else if(typeof highlightMergeTableRow==='function'){
+          highlightMergeTableRow(code);
+        }
       }
       const rect = container.getBoundingClientRect();
       const domPos = params.pointer?.DOM || {};
@@ -1227,6 +1451,26 @@ if(collapseBtn){
     ensurePhysicsOn();
   });
 }
+
+let mergeTableActiveRow=null;
+function highlightMergeTableRow(code){
+  if(!code) return false;
+  const table=document.getElementById('mergeDataTable');
+  if(!table) return false;
+  const normalized=String(code).trim();
+  const target = table.querySelector(`tr[data-code="${CSS.escape(normalized)}"]`) ||
+    table.querySelector(`tr[data-code="${CSS.escape(normalized.toLowerCase())}"]`);
+  if(!target) return false;
+  if(mergeTableActiveRow && mergeTableActiveRow!==target){
+    mergeTableActiveRow.classList.remove('is-highlighted');
+  }
+  mergeTableActiveRow=target;
+  mergeTableActiveRow.classList.add('is-highlighted');
+  try{ target.scrollIntoView({ behavior:'smooth', block:'nearest' }); }
+  catch(err){ target.scrollIntoView({ block:'nearest' }); }
+  return true;
+}
+if(typeof window!=='undefined'){ window.highlightMergeTableRow = highlightMergeTableRow; }
 if(explodeBtn){
   explodeBtn.addEventListener('click',()=> startExplodeAll());
 }
@@ -1351,8 +1595,14 @@ if(mergeResetBtn){
     try{ mergeNetwork?.fit?.({ animation:true }); }catch(err){ console.warn('merge fit failed', err); }
   });
 }
-if(mergeExportPngBtn){
-  mergeExportPngBtn.addEventListener('click', ()=>{ if(typeof exportMergePNG==='function'){ exportMergePNG(); } });
+if(mergeExportExcelBtn){
+  mergeExportExcelBtn.addEventListener('click', ()=>{
+    if(typeof exportMergeExcel==='function'){
+      exportMergeExcel();
+    }else{
+      alert('导出功能未就绪');
+    }
+  });
 }
 const aiMergeBtn=document.getElementById('mergeAiButton');
 if(aiMergeBtn){
@@ -1362,22 +1612,292 @@ if(aiMergeBtn){
     if(aiBtnLabel){ aiBtnLabel.textContent=text; }
     else{ aiMergeBtn.textContent=text; }
   };
-  aiMergeBtn.addEventListener('click', ()=>{
+  const AI_PROGRESS_DURATION=10000;
+  let aiProgressRaf=null;
+  let aiProgressRunning=false;
+
+  const resetAiProgressModal=()=>{
+    if(aiProgress){ aiProgress.hidden=true; aiProgress.setAttribute('aria-hidden','true'); }
+    if(aiProgressBar){ aiProgressBar.style.width='0%'; }
+    if(aiProgressValue){ aiProgressValue.textContent='0%'; }
+    if(aiProgressTitle){ aiProgressTitle.textContent='工品查同品聚品主薄任务进行中'; }
+    if(aiProgressDesc){ aiProgressDesc.textContent='正在处理，请稍候…'; }
+    if(aiProgressGoto){ aiProgressGoto.hidden=true; }
+    aiProgressRunning=false;
+    if(aiProgressRaf){ cancelAnimationFrame(aiProgressRaf); aiProgressRaf=null; }
+  };
+
+  const closeAiProgressModal=()=>{
+    resetAiProgressModal();
+  };
+
+  const completeAiProgressModal=()=>{
+    if(aiProgressBar){ aiProgressBar.style.width='100%'; }
+    if(aiProgressValue){ aiProgressValue.textContent='100%'; }
+    if(aiProgressTitle){ aiProgressTitle.textContent='任务已完成'; }
+    if(aiProgressDesc){ aiProgressDesc.textContent='是否前往工品查同源智合剔品页面？'; }
+    if(aiProgressGoto){ aiProgressGoto.hidden=false; }
+    aiProgressRunning=false;
+  };
+
+  const startAiProgressModal=()=>{
+    resetAiProgressModal();
+    if(aiProgress){ aiProgress.hidden=false; aiProgress.setAttribute('aria-hidden','false'); }
+    const start=performance.now();
+    aiProgressRunning=true;
+    const easeOutCubic=(t)=> 1 - Math.pow(1 - t, 3);
+    const tick=(ts)=>{
+      const elapsed=ts-start;
+      const ratio=Math.min(1, elapsed/AI_PROGRESS_DURATION);
+      const eased=easeOutCubic(ratio);
+      const pct=Math.min(100, Math.max(0, Math.round(eased*100)));
+      if(aiProgressBar){ aiProgressBar.style.width=pct+'%'; }
+      if(aiProgressValue){ aiProgressValue.textContent=pct+'%'; }
+      if(ratio<1){
+        aiProgressRaf=requestAnimationFrame(tick);
+      }else{
+        completeAiProgressModal();
+      }
+    };
+    aiProgressRaf=requestAnimationFrame(tick);
+  };
+
+  const closeAiConfirm=()=>{
+    if(aiConfirm){
+      aiConfirm.hidden=true;
+      aiConfirm.setAttribute('aria-hidden','true');
+    }
+  };
+  const runAiPrune=()=>{
     aiMergeBtn.disabled=true;
     setAiButtonText('聚品中…');
+    closeAiConfirm();
+    startAiProgressModal();
     try{
       refreshMergeGraph({ keepPositions:false, fit:true, defer:false });
       if(typeof setStatus==='function'){ setStatus('AI 一键聚品完成'); }
     }catch(err){
       console.error(err);
+      alert('AI 一键聚品执行失败，请稍后重试');
     }finally{
       setTimeout(()=>{
         aiMergeBtn.disabled=false;
         setAiButtonText(defaultText);
       }, 400);
     }
-  });
+  };
+  const openAiConfirm=()=>{
+    if(!aiAvailable) return;
+    if(!aiConfirm || !aiConfirmAccept){
+      runAiPrune();
+      return;
+    }
+    aiConfirm.hidden=false;
+    aiConfirm.setAttribute('aria-hidden','false');
+    try{ aiConfirmAccept.focus(); }catch(err){}
+  };
+  aiMergeBtn.addEventListener('click', openAiConfirm);
+  if(aiConfirmCancel){
+    aiConfirmCancel.addEventListener('click', ()=>{
+      closeAiConfirm();
+    });
+  }
+  if(aiConfirmAccept){
+    aiConfirmAccept.addEventListener('click', ()=>{
+      runAiPrune();
+    });
+  }
+  if(aiConfirm){
+    aiConfirm.addEventListener('click', (ev)=>{
+      if(ev.target===aiConfirm){ closeAiConfirm(); }
+    });
+  }
+if(aiProgressGoto){
+  aiProgressGoto.addEventListener('click', ()=>{
+      let opened=false;
+      if(lastUploadBuffer){
+        try{
+          const b64=bufferToBase64(lastUploadBuffer);
+          sessionStorage.setItem(PRO_BUFFER_KEY, b64);
+          const url=new URL(window.location.href);
+          url.searchParams.set(PRO_EXPORT_PARAM,'1');
+          window.open(url.toString(), '_blank');
+          opened=true;
+        }catch(err){ console.warn('open prosheet window failed', err); }
+      }
+      if(!opened){
+        const url = aiProgressGoto.dataset.targetUrl || aiProgressGoto.getAttribute('data-target-url') || '';
+        if(url){
+          try{ window.open(url, '_blank'); }catch(err){ console.warn('open url failed', err); }
+        }
+      }
+      closeAiProgressModal();
+    });
+  }
+  if(aiProgress){
+    aiProgress.addEventListener('click', (ev)=>{
+      if(ev.target===aiProgress){
+        if(!aiProgressRunning){ closeAiProgressModal(); }
+      }
+    });
+  }
 }
+
+function parseProSheetToMerge(rows){
+  if(typeof vis==='undefined'){
+    setTimeout(()=>parseProSheetToMerge(rows), 120);
+    return;
+  }
+  ensureMergeNetwork();
+  if(!Array.isArray(rows) || rows.length<2){
+    alert('剔品同品组专业 Sheet 数据为空');
+    return;
+  }
+  const header = rows[0].map(c=>String(c??'').trim());
+  const normalizeHeader = (h)=> h.replace(/\s+/g,'').toLowerCase();
+  const headerNorm = header.map(normalizeHeader);
+  const findIndex=(labels)=>{
+    const targets=labels.map(k=>normalizeHeader(k));
+    for(let i=0;i<headerNorm.length;i++){
+      const h=headerNorm[i];
+      if(targets.includes(h)) return i;
+    }
+    for(let i=0;i<headerNorm.length;i++){
+      const h=headerNorm[i];
+      if(targets.some(t=> h.includes(t))) return i;
+    }
+    return -1;
+  };
+  const groupIdx = findIndex(['同品组序号']);
+  const codeIdx = findIndex(['物料编码']);
+  const nameIdx = findIndex(['物料描述']);
+  const recIdx  = findIndex(['剔品推荐']);
+  const reasonIdx = findIndex(['剔品理由']);
+  if(groupIdx===-1 || codeIdx===-1){
+    alert('剔品同品组专业 Sheet 缺少必须的“同品组序号/物料编码”列');
+    return;
+  }
+  // 分组内按编码去重：保留优先，名称优先，其次首条
+  const groups=new Map();
+  for(let r=1;r<rows.length;r++){
+    const row=rows[r]; if(!row) continue;
+    const gid=String(row[groupIdx]||'').trim(); if(!gid) continue;
+    const code=String(row[codeIdx]||'').trim(); if(!code) continue;
+    const nameRaw=nameIdx>=0? String(row[nameIdx]||'').trim() : '';
+    const name=(nameRaw && nameRaw!==code) ? nameRaw : '';
+    const recRaw =recIdx>=0? String(row[recIdx]||'').trim() : '';
+    const recNorm = recRaw.replace(/\s+/g,'');
+    const reason = reasonIdx>=0? String(row[reasonIdx]||'').trim() : '';
+    if(!groups.has(gid)) groups.set(gid, new Map());
+    const map = groups.get(gid);
+    const existing = map.get(code);
+    const isKeep = recNorm.includes('保留');
+    if(!existing){
+      map.set(code,{ gid, code, name, rec:recRaw, recNorm, reason, isKeep });
+    }else{
+      const keepOld = existing.isKeep;
+      const betterKeep = isKeep && !keepOld;
+      const betterName = (!existing.name || existing.name===existing.code) && name && name!==code;
+      if(betterKeep || (!keepOld && isKeep) || betterName){
+        map.set(code,{ gid, code, name, rec:recRaw, recNorm, reason, isKeep });
+      }
+    }
+  }
+  if(!groups.size){
+    alert('剔品同品组专业 Sheet 中未找到有效数据');
+    return;
+  }
+
+  ensureMergeNetwork();
+  if(mergeNodesDS?.clear){ try{ mergeNodesDS.clear(); }catch{} }
+  if(mergeEdgesDS?.clear){ try{ mergeEdgesDS.clear(); }catch{} }
+
+  const nodes=[]; const edges=[];
+  const tableRows=[];
+  let seq=1, victimCount=0;
+  groups.forEach((codeMap,gid)=>{
+    const items = Array.from(codeMap.values());
+    const survivors=items.filter(it=> String(it.recNorm||it.rec||'').includes('保留'));
+    const center = survivors[0] || items[0];
+    items.forEach(it=>{
+      const isCenter = it.code===center.code;
+      nodes.push({
+        id:'M:'+it.code,
+        rawId:it.code,
+        label:it.name ? `${it.code}\n${it.name}` : it.code,
+        color:{ background: isCenter? '#fbcfe8':'#bfdbfe', border:isCenter? '#f472b6':'#93c5fd' },
+        font:{ color:'#111827' },
+        size: isCenter? 14 : 9
+      });
+      if(!isCenter){
+        edges.push({
+          id:'ME:'+center.code+'::'+it.code,
+          from:'M:'+center.code,
+          to:'M:'+it.code,
+          color:{ color:'#94a3b8' }
+        });
+      }
+      const primary = center.code;
+      const recommend = it.rec || (isCenter? '建议保留' : '建议剔除');
+      const row={
+        code:it.code,
+        rawCode:it.code,
+        cells:[
+          gid,
+          it.code,
+          it.name||'',
+          recommend,
+          it.reason||''
+        ],
+        originalIndex: seq-1,
+        meta:{
+          mergerCode: primary,
+          cid: gid,
+          reason: it.reason||'',
+          displayName: it.name || '',
+          recommendation: recommend,
+          isCenter
+        }
+      };
+      tableRows.push(row);
+      seq++;
+      if(!isCenter) victimCount++;
+    });
+  });
+
+  try{
+    mergeNodesDS.add(nodes);
+    mergeEdgesDS.add(edges);
+    mergeNetwork?.fit?.({ animation:false });
+  }catch(err){ console.warn('merge vis 渲染失败', err); }
+
+  const mergeCtx=getTableContext('merge');
+  if(mergeCtx){
+    mergeCtx.rows=tableRows;
+    mergeCtx.dataByCode=new Map();
+    tableRows.forEach(r=> mergeCtx.dataByCode.set(r.code, r));
+    renderTableContext('merge');
+    const placeholder=document.getElementById('mergeTablePlaceholder');
+    if(placeholder){ placeholder.textContent='数据来源：剔品同品组专业 Sheet'; }
+  }
+
+  syncMergePanelStats({ components:groups.size, victims:victimCount, edges:edges.length, nodes:nodes.length }, nodes.length);
+  if(mergeHintEl){
+    mergeHintEl.textContent = `来自“${PRO_SHEET_NAME}” · 组 ${groups.size} · 节点 ${nodes.length}`;
+  }
+
+  // 单独导出发布逻辑：发布按钮导出当前表格
+  if(publishBtnHeader && PRO_EXPORT_MODE){
+    publishBtnHeader.onclick = ()=>{
+      try{
+        exportMergeExcel();
+      }catch(err){
+        alert('导出失败：'+(err?.message||err));
+      }
+    };
+  }
+}
+
 
 const versionHistoryRecords=[];
 function renderHistoryPanel(){
@@ -1540,11 +2060,6 @@ addEventListener('keydown',(ev)=>{
   const targetTag = ev.target?.tagName?.toLowerCase();
   if(targetTag==='input' || targetTag==='textarea' || ev.target?.isContentEditable) return;
   if(ev.key==='Delete' && !ev.ctrlKey && !ev.metaKey && !ev.altKey){
-    const selectedNodes = network?.getSelectedNodes?.() || [];
-    if(selectedNodes.length){
-      if(removeNode(selectedNodes[0])) ev.preventDefault();
-      return;
-    }
     const selectedEdges = network?.getSelectedEdges?.() || [];
     if(selectedEdges.length){
       if(removeEdgeById(selectedEdges[0])) ev.preventDefault();
@@ -1874,14 +2389,34 @@ if(typeof window!=='undefined'){
   window.focusMergeNode = focusMergeNode;
 }
 
+if(PRO_EXPORT_MODE){
+  document.addEventListener('DOMContentLoaded', async ()=>{
+    try{
+      try{ setActiveView(VIEW_MERGE); }catch(err){}
+      const b64=sessionStorage.getItem(PRO_BUFFER_KEY);
+      if(!b64){
+        alert('未找到可用于导出的上传数据，请返回原页面重新发起。');
+        return;
+      }
+      const buf=base64ToArrayBuffer(b64);
+      lastUploadBuffer=buf;
+      await loadProSheetView(buf);
+    }catch(err){
+      console.error('prosheet 加载失败', err);
+      alert('加载专用 Sheet 失败，请重试。');
+    }
+  }, { once:true });
+}
+
 const minGroupInput=document.getElementById('minGroup');
 minGroupInput.addEventListener('input',()=>{ document.getElementById('minGroupLabel').textContent='≥ '+(minGroupInput.value||'2'); renderCollapsed(); if(exploding) updateETA(); });
 
 document.getElementById('build').addEventListener('click', async ()=>{
   const f=document.getElementById('file').files[0]; if(!f){ alert('请选择 Excel/CSV 文件'); return; }
+  await ensureXlsxReady();
   resetAll(); setProgress(0,'解析文件…');
   setStatus(useWorker? '正在后台解析（Worker）…':'正在主线程解析…');
-  const buf=await f.arrayBuffer(); const preferred=preferredSheetName();
+  const buf=await f.arrayBuffer(); lastUploadBuffer=buf; const preferred=preferredSheetName();
 
   if(useWorker && workerReady){
     const onMsg=(e)=>{
@@ -2062,6 +2597,18 @@ function ensureWorker(){
       worker.addEventListener('message', onWorkerMsg);
     }catch(e){ setStatus('不支持 Worker，使用主线程解析'); useWorker=false; }
   }
+  // 若 Worker 未能加载 XLSX，则主动降级主线程并预加载 XLSX
+  setTimeout(()=>{
+    if(workerReady) return;
+    if(typeof window.XLSX!=='undefined') return;
+    const existed=document.querySelector('script[data-skgene-xlsx]');
+    if(existed) return;
+    const script=document.createElement('script');
+    script.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    script.setAttribute('data-skgene-xlsx','1');
+    script.defer=true;
+    document.head.appendChild(script);
+  }, 300);
 }
 
 /* --------- 主线程解析（含中文修复） --------- */
@@ -2178,8 +2725,15 @@ function parseOnMainThread(buffer, sheetNamePreferred){
 
   MT_ctx={ parsed:true, comps, compOf, edgesGlobal:edgesSet, nameOf, adj, edgesByComp, reasons:reasonMap };
   if(typeof globalThis!=='undefined'){ globalThis.MT_ctx = MT_ctx; }
+  const stateDump={
+    comps:Array.from(comps.entries()).map(([cid,set])=>[cid, Array.from(set)]),
+    nameOf:Array.from(nameOf.entries()),
+    adj:Array.from(adj.entries()).map(([id,set])=>[id, Array.from(set)]),
+    edgesByComp:Array.from(edgesByComp.entries())
+  };
   return { comps:compList, totalNodes:ids.size, totalEdges:edgesSet.size, degreeMax:degMax, degreeP95:degP95,
-           edgesByComp:Array.from(edgesByComp.entries()).map(([cid,count])=>({cid,count})), rawRows: rows, codeIndex: codeIdx };
+           edgesByComp:Array.from(edgesByComp.entries()).map(([cid,count])=>({cid,count})), rawRows: rows, codeIndex: codeIdx,
+           stateDump };
 }
 function neighborsMainThread(id){ const set=(MT_ctx.adj?.get(id)||new Set()); const neighbors=Array.from(set).map(n=>{
   const info = MT_ctx.reasons?.get(id)?.get(n) || MT_ctx.reasons?.get(n)?.get(id) || null;

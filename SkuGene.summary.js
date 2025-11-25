@@ -62,14 +62,22 @@ const PRIMARY_CODE_HEADER_CANDIDATES=['物料编码','商品编码','主品编�
 const GROUP_CODE_HEADER_LABELS=['同品关系编码','同品组编码','同品商品ID','同品ID'];
 const PEER_CODE_HEADER_LABELS=['同品物料编码','同品物料編碼'];
 const TASK_INDICATOR_HEADER_LABELS=['是否本次任务物料'];
-const MERGE_TABLE_COLUMNS=[
+let MERGE_TABLE_COLUMNS=[
   { key:'seq', label:'同品组序号' },
   { key:'code', label:'商品编码' },
   { key:'name', label:'商品名称' },
   { key:'recommend', label:'剔品推荐' },
-  { key:'reason', label:'剔品理由' },
   { key:'primary', label:'当前归属主品编码' }
 ];
+if(typeof globalThis!=='undefined' && globalThis.PRO_EXPORT_MODE){
+  MERGE_TABLE_COLUMNS=[
+    { key:'seq', label:'同品组序号' },
+    { key:'code', label:'物料编码' },
+    { key:'name', label:'物料描述' },
+    { key:'recommend', label:'剔品推荐' },
+    { key:'reason', label:'剔品理由' }
+  ];
+}
 let groupToggleListenerBound=false;
 if(typeof document!=='undefined'){
   try{ document.body.setAttribute('data-skgene-build','v20250217'); }catch(err){}
@@ -208,6 +216,20 @@ function onSummary(e){
   GROUP_CAP_ALL = percentile(sizesAll, 0.95);
   GROUP_CAP_NOSINGLES = percentile(sizesAll.filter(s=>s>1), 0.95);
   GROUP_CAP = GROUP_CAP_ALL;
+  if(e.stateDump){
+    try{
+      const compsMap=new Map((e.stateDump.comps||[]).map(([cid,arr])=>[String(cid), new Set(arr.map(String))]));
+      const nameOf=new Map((e.stateDump.nameOf||[]).map(([k,v])=>[String(k), v]));
+      const adj=new Map((e.stateDump.adj||[]).map(([id,arr])=>[String(id), new Set(arr.map(String))]));
+      const compOf=new Map();
+      compsMap.forEach((set,cid)=> set.forEach(n=> compOf.set(n, cid)));
+      const edgesGlobal=new Set();
+      adj.forEach((set,from)=>{ set.forEach(to=> edgesGlobal.add([from,to].sort().join('::'))); });
+      const edgesByComp=new Map((e.stateDump.edgesByComp||[]).map(([cid,count])=>[String(cid), count]));
+      MT_ctx={ parsed:true, comps:compsMap, compOf, edgesGlobal, nameOf, adj, edgesByComp, reasons:null };
+      if(typeof globalThis!=='undefined'){ globalThis.MT_ctx = MT_ctx; }
+    }catch(err){ console.warn('stateDump 恢复失败', err); }
+  }
   try{
     if(typeof syncGraphStats === 'function'){ syncGraphStats(e); }
   }catch(err){ console.warn('syncGraphStats failed', err); }
@@ -514,6 +536,7 @@ async function handleGroupPruneAction(cid, button){
         button.textContent = originalText;
       }
     }
+    try{ if(typeof markAutosaveSaved==='function'){ markAutosaveSaved(); } }catch(err){}
   }
 }
 
@@ -550,6 +573,21 @@ async function handleGroupUltimateAction(cid, button){
       }
     }
   }
+}
+
+function handleUltimatePruneForCode(code, button){
+  const normalized=normalizeCode(code||'');
+  if(!normalized){
+    alert('未找到商品编码，无法剔品');
+    return;
+  }
+  const cid = typeof getComponentIdByCode==='function' ? getComponentIdByCode(normalized) : null;
+  if(!cid){
+    alert('未找到该节点所属的同品组');
+    return;
+  }
+  try{ if(typeof markAutosaveDirty==='function'){ markAutosaveDirty({ sticky:true }); } }catch(err){}
+  handleGroupUltimateAction(cid, button);
 }
 
 // 添加剔品详情面板的关闭按钮事件
@@ -1212,6 +1250,12 @@ function handleRelationRemovalBetweenCodes(codeA, codeB){
   const normalizedA=normalizeCode(codeA);
   const normalizedB=normalizeCode(codeB);
   if(!normalizedA || !normalizedB) return;
+  // 先更新图谱画布：删除两节点之间的边
+  try{
+    if(typeof removeEdgesBetweenNodes==='function'){
+      removeEdgesBetweenNodes('N:'+normalizedA, 'N:'+normalizedB, { recordUndo:true, skipRelationSync:true });
+    }
+  }catch(err){ console.warn('removeEdgesBetweenNodes failed', err); }
   let needsRender=false;
   if(removeRelationFromEntry(normalizedA, normalizedB)) needsRender=true;
   if(removeRelationFromEntry(normalizedB, normalizedA)) needsRender=true;
@@ -1402,9 +1446,8 @@ function buildTableColumnOrder(rows, { includeScore=true }={}){
     reasonColumn.kind='reason';
     columnOrder.push(reasonColumn);
   }
-  if(columnOrder.length){
-    moveTaskIndicatorColumnToEnd(columnOrder);
-  }
+  repositionAnalysisColumns(columnOrder);
+  const relationIndex = findRelationColumnIndex(columnOrder);
   if(!columnOrder.length){
     columnOrder.push({
       label:'列1',
@@ -1419,16 +1462,46 @@ function buildTableColumnOrder(rows, { includeScore=true }={}){
     columnCount:columnOrder.length,
     scoreColumnIndex: columnOrder.findIndex(col=>col.kind==='score'),
     pillColumnIndexes: pillColumnIndexesRaw,
-    reasonSourceIndex:reasonIndex
+    reasonSourceIndex:reasonIndex,
+    relationIndex
   };
 }
 
-function moveTaskIndicatorColumnToEnd(columnOrder){
+function repositionAnalysisColumns(columnOrder){
   if(!Array.isArray(columnOrder) || !columnOrder.length) return;
-  const idx=columnOrder.findIndex(col=> isTaskIndicatorColumn(col?.label));
-  if(idx<0) return;
-  const [column]=columnOrder.splice(idx,1);
-  columnOrder.push(column);
+  const source=[...columnOrder];
+  const slots={ score:null, reason:null, task:null };
+  const remaining=[];
+  source.forEach(col=>{
+    if(!slots.score && col.kind==='score'){ slots.score=col; return; }
+    if(!slots.reason && col.kind==='reason'){ slots.reason=col; return; }
+    if(!slots.task && isTaskIndicatorColumn(col.label)){ slots.task=col; return; }
+    remaining.push(col);
+  });
+  const relationIdx=remaining.findIndex(col=>{
+    const key=normalizeHeaderKey(col.label);
+    return GROUP_CODE_HEADER_LABELS.some(lbl=> normalizeHeaderKey(lbl)===key);
+  });
+  if(relationIdx<0){
+    columnOrder.length=0;
+    columnOrder.push(...source);
+    return;
+  }
+  const injected=[];
+  if(slots.score) injected.push(slots.score);
+  if(slots.reason) injected.push(slots.reason);
+  if(slots.task) injected.push(slots.task);
+  const next=[...remaining.slice(0, relationIdx+1), ...injected, ...remaining.slice(relationIdx+1)];
+  columnOrder.length=0;
+  columnOrder.push(...next);
+}
+
+function findRelationColumnIndex(columnOrder){
+  if(!Array.isArray(columnOrder) || !columnOrder.length) return -1;
+  return columnOrder.findIndex(col=>{
+    const key=normalizeHeaderKey(col?.label);
+    return GROUP_CODE_HEADER_LABELS.some(lbl=> normalizeHeaderKey(lbl)===key);
+  });
 }
 
 function isTaskIndicatorColumn(label){
@@ -1586,29 +1659,35 @@ function renderGraphTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
   placeholder.setAttribute('aria-hidden','true');
   scrollWrapper.hidden=false;
   const columnConfig=buildTableColumnOrder(rows, { includeScore:true });
-  const { columnOrder, columnCount, scoreColumnIndex, pillColumnIndexes, reasonSourceIndex } = columnConfig;
+  const { columnOrder, columnCount, scoreColumnIndex, pillColumnIndexes, reasonSourceIndex, relationIndex } = columnConfig;
+  const totalColumns = columnCount + 1; // 额外一列：行级究极剔品
   const scoreMap = (scoreColumnIndex>=0) ? buildRowScoreMap(rows, { reasonIndex:reasonSourceIndex }) : null;
-  const headCells=columnOrder.map((col, idx)=>{
-    const thClasses=[];
-    if(idx===scoreColumnIndex) thClasses.push('col-score');
-    const thClassAttr = thClasses.length? ` class="${thClasses.join(' ')}"` : '';
-    return `<th scope="col"${thClassAttr}>${escapeRawCell(col.label)}</th>`;
-  });
+  const headCells=[
+    '<th scope="col" class="col-action" aria-label="行级操作"></th>',
+    ...columnOrder.map((col, idx)=>{
+      const thClasses=[];
+      if(idx===scoreColumnIndex) thClasses.push('col-score');
+      if(idx===relationIndex) thClasses.push('col-relation');
+      const thClassAttr = thClasses.length? ` class="${thClasses.join(' ')}"` : '';
+      return `<th scope="col"${thClassAttr}>${escapeRawCell(col.label)}</th>`;
+    })
+  ];
   const groups=buildGraphComponentGroupList(rows);
-  const colWidths = buildGraphColumnRules(columnCount, { scoreIndex:scoreColumnIndex, pillIndexes:pillColumnIndexes });
+  const colWidths = buildGraphColumnRules(columnCount, { scoreIndex:scoreColumnIndex, pillIndexes:pillColumnIndexes, columnOrder, relationIndex });
   const buildDisplayCells=(row)=> mapCellsToColumnOrder(row, columnOrder, scoreMap?.get(row));
   let sections='';
   if(groups.length){
     sections=groups.map((group, idx)=>{
       const colorClass = GRAPH_GROUP_COLOR_CLASSES[idx % GRAPH_GROUP_COLOR_CLASSES.length];
       const collapsed = tableGroupCollapseState.graph.get(group.key);
-      const headerRow=`<tr class="merge-group__header merge-group__header-row ${colorClass}"><td colspan="${columnCount}"><div class="group-header"><button type="button" class="group-toggle" data-table="graph" data-group="${escapeAttr(group.key)}" aria-expanded="${collapsed? 'false':'true'}" aria-label="切换大组"><span class="group-toggle__icon"></span></button><span>大组 ${idx+1} · ${group.rows.length} 个节点</span></div></td></tr>`;
+      const headerRow=`<tr class="merge-group__header merge-group__header-row ${colorClass}"><td colspan="${totalColumns}"><div class="group-header"><button type="button" class="group-toggle" data-table="graph" data-group="${escapeAttr(group.key)}" aria-expanded="${collapsed? 'false':'true'}" aria-label="切换大组"><span class="group-toggle__icon"></span></button><span>大组 ${idx+1} · ${group.rows.length} 个节点</span></div></td></tr>`;
       const rowsHtml=group.rows.map(row=>{
         if(isGraphRowHidden(row)) return '';
         const attrs = buildRowDataAttributes(row);
         const displayCells = buildDisplayCells(row);
         const rowScore = scoreMap?.get(row) ?? '';
-        return `<tr class="raw-table-row ${colorClass}"${attrs}>${renderTableCells(displayCells, columnCount, { scoreIndex:scoreColumnIndex, pillIndexes:pillColumnIndexes, row, rowScore })}</tr>`;
+        const allowUltimate = !!normalizeCode(row.primaryCellCode);
+        return `<tr class="raw-table-row ${colorClass}"${attrs}>${renderRowUltimateCell(row, { allowUltimate, preferredCode: row.primaryCellCode || row.code })}${renderTableCells(displayCells, columnCount, { scoreIndex:scoreColumnIndex, pillIndexes:pillColumnIndexes, relationIndex, row, rowScore })}</tr>`;
       }).join('');
       return `<tbody class="merge-group ${colorClass}${collapsed? ' is-collapsed':''}" data-group="${escapeAttr(group.key)}" data-table="graph">${headerRow}${rowsHtml}</tbody>`;
     }).join('');
@@ -1618,11 +1697,12 @@ function renderGraphTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
       const attrs = buildRowDataAttributes(row);
       const displayCells = buildDisplayCells(row);
       const rowScore = scoreMap?.get(row) ?? '';
-      return `<tr class="raw-table-row"${attrs}>${renderTableCells(displayCells, columnCount, { scoreIndex:scoreColumnIndex, pillIndexes:pillColumnIndexes, row, rowScore })}</tr>`;
+      const allowUltimate = !!normalizeCode(row.primaryCellCode);
+      return `<tr class="raw-table-row"${attrs}>${renderRowUltimateCell(row, { allowUltimate, preferredCode: row.primaryCellCode || row.code })}${renderTableCells(displayCells, columnCount, { scoreIndex:scoreColumnIndex, pillIndexes:pillColumnIndexes, relationIndex, row, rowScore })}</tr>`;
     }).join('');
     sections = `<tbody>${bodyHtml}</tbody>`;
   }
-  const colgroup = colWidths ? `<colgroup>${colWidths}</colgroup>` : '';
+  const colgroup = colWidths ? `<colgroup><col class="col-action-col">${colWidths}</colgroup>` : '';
   table.innerHTML = `${colgroup}<thead><tr>${headCells.join('')}</tr></thead>${sections}`;
   ctx.tableEl=table;
   ctx.renderedRowMap=new Map();
@@ -1648,9 +1728,35 @@ function renderGraphTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
       }
     });
   });
+  if(!table.dataset.ultimateBound){
+    table.addEventListener('click', (ev)=>{
+      const btn = ev.target instanceof Element ? ev.target.closest('.row-ultimate-btn') : null;
+      if(!btn) return;
+      ev.preventDefault();
+      const code=normalizeCode(btn.dataset.code || '');
+      if(!code){
+        alert('未找到商品编码，无法剔品');
+        return;
+      }
+      handleUltimatePruneForCode(code, btn);
+    });
+    table.dataset.ultimateBound='true';
+  }
+  if(!table.dataset.relationBound){
+    table.addEventListener('click', ev=>{
+      const btn=ev.target instanceof Element ? ev.target.closest('.row-remove-rel-btn') : null;
+      if(!btn) return;
+      ev.preventDefault();
+      const primary=normalizeCode(btn.dataset.primary||'');
+      const relList=String(btn.dataset.rel||'').split(',').map(s=> normalizeCode(s)).filter(Boolean);
+      if(!primary || !relList.length) return;
+      relList.forEach(rel=> handleRelationRemovalBetweenCodes(primary, rel));
+    });
+    table.dataset.relationBound='true';
+  }
   ctx.activeRow=null;
   const totalRows = rows.length + (rawTableHeader.length ? 1 : 0);
-  meta.textContent = `${totalRows} 行（含表头） · ${columnCount} 列`;
+  meta.textContent = `${totalRows} 行（含表头） · ${totalColumns} 列`;
   ensureTableScrollSync(ctx);
   scheduleTableScrollbarUpdate(ctx);
   updateScrollButtonsState(ctx);
@@ -1686,7 +1792,6 @@ function renderMergeTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
   const columnCount=columnOrder.length;
   const headCells=columnOrder.map(col=> `<th scope="col">${escapeRawCell(col.label)}</th>`);
   const colgroupMarkup = buildMergeColumnRules(columnOrder);
-  const reasonIndex=findReasonColumnIndex();
   const groups=buildMergeGroups(rows);
   if(!groups.length){
     const colgroup = colgroupMarkup ? `<colgroup>${colgroupMarkup}</colgroup>` : '';
@@ -1705,26 +1810,46 @@ function renderMergeTableView(ctx,{ placeholder, scrollWrapper, meta, table }){
     const dataKey=`merge:${group.key}`;
     const collapsed=tableGroupCollapseState.merge.get(dataKey);
     const seq=idx+1;
-    const headerRow=`<tr class="merge-group__header merge-group__header-row ${colorClass}"><td colspan="${columnCount}"><div class="group-header"><button type="button" class="group-toggle" data-table="merge" data-group="${escapeAttr(dataKey)}" aria-expanded="${collapsed? 'false':'true'}" aria-label="切换聚品组"><span class="group-toggle__icon"></span></button><span>聚品组 ${seq} · 中心节点：${escapeRawCell(groupLabel)}${group.cid ? ` · 组件 ${escapeRawCell(group.cid)}`:''}</span></div></td></tr>`;
+    const headerRow=`<tr class="merge-group__header merge-group__header-row ${colorClass}"><td colspan="${columnCount}"><div class="group-header"><button type="button" class="group-toggle" data-table="merge" data-group="${escapeAttr(dataKey)}" aria-expanded="${collapsed? 'false':'true'}" aria-label="切换聚品组"><span class="group-toggle__icon"></span></button><span>聚品组 ${seq} · 中心节点：${escapeRawCell(groupLabel)}${group.cid ? ` · 同品组序号 ${escapeRawCell(group.cid)}`:''}</span></div></td></tr>`;
+    const centerRecommend = (typeof globalThis!=='undefined' && globalThis.PRO_EXPORT_MODE)
+      ? (group.centerEntry?.meta?.recommendation || group.centerEntry?.rec || '')
+      : '建议保留';
     const centerRow = renderMergeDataRow({
       columnCount,
       groupSeq:seq,
       entry:group.centerEntry,
       fallbackCode:group.centerCode,
       fallbackName:group.centerLabel,
-      recommendation:'建议保留',
-      reasonIndex,
+      recommendation:centerRecommend,
       primaryCode:group.centerCode,
       colorClass:`merge-group__center ${colorClass}`
     });
-    const victimRows = group.victims.length
-      ? group.victims.map(victim=> renderMergeDataRow({
+    let victimsList = group.victims;
+    if(typeof globalThis!=='undefined' && globalThis.PRO_EXPORT_MODE){
+      const centerNorm=normalizeCode(group.centerCode);
+      let removed=false;
+      victimsList = group.victims.filter(v=>{
+        if(removed) return true;
+        const codeNorm=normalizeCode(v.code);
+        const nameRaw = v?.meta?.displayName || (Array.isArray(v.cells)? v.cells[2] : '') || v.name || '';
+        const nameNorm=normalizeCode(nameRaw);
+        const isDupCenter = codeNorm===centerNorm && (!nameRaw || nameNorm===centerNorm);
+        if(isDupCenter){
+          removed=true;
+          return false; // 删除首个编码=中心且名称为空/等于编码的重复行
+        }
+        return true;
+      });
+    }
+    const victimRows = victimsList.length
+      ? victimsList.map(victim=> renderMergeDataRow({
           columnCount,
           groupSeq:seq,
           entry:victim,
           fallbackCode:victim.code,
-          recommendation:'建议剔除',
-          reasonIndex,
+          recommendation: (typeof globalThis!=='undefined' && globalThis.PRO_EXPORT_MODE)
+            ? (victim?.meta?.recommendation || victim?.rec || '')
+            : '建议剔除',
           primaryCode:normalizeCode(victim.meta?.mergerCode)||group.centerCode,
           colorClass:`merge-group__victim ${colorClass}`
         })).join('')
@@ -1775,7 +1900,12 @@ function buildMergeGroups(rows){
         victims:[]
       });
     }
-    groups.get(key).victims.push(row);
+    if(meta.isCenter){
+      groups.get(key).centerEntry = row;
+      groups.get(key).centerLabel = row.cells?.[2] || row.code || centerCode;
+    }else{
+      groups.get(key).victims.push(row);
+    }
   });
   const graphCtx=tableContexts.graph;
   groups.forEach(group=>{
@@ -1808,16 +1938,29 @@ function buildMergeColumnRules(columns){
 function renderMergeDataRow({ columnCount, groupSeq, entry, fallbackCode, fallbackName, recommendation, reasonIndex=-1, primaryCode, colorClass }){
   const code = entry?.code || fallbackCode || '';
   const name = getEntryDisplayName(entry, fallbackName || code);
-  const reasonCell = getEntryReasonCell(entry, reasonIndex);
   const primary = primaryCode || entry?.meta?.closestPrimaryCode || code;
-  const cells=[
-    groupSeq ?? '',
-    code,
-    name,
-    recommendation || '',
-    reasonCell ?? '',
-    primary || ''
-  ];
+  const reason = entry?.meta?.reason || '';
+  const recommendText = (typeof globalThis!=='undefined' && globalThis.PRO_EXPORT_MODE)
+    ? (entry?.meta?.recommendation || recommendation || '')
+    : (recommendation || '');
+  let cells;
+  if(typeof globalThis!=='undefined' && globalThis.PRO_EXPORT_MODE){
+    cells=[
+      groupSeq ?? entry?.meta?.cid ?? '',
+      code,
+      name,
+      recommendText,
+      reason || ''
+    ];
+  }else{
+    cells=[
+      groupSeq ?? '',
+      code,
+      name,
+      recommendation || '',
+      primary || ''
+    ];
+  }
   const attrs=buildMergeRowAttributes(entry, code, primary);
   return `<tr class="raw-table-row ${colorClass||''}"${attrs}>${renderTableCells(cells, columnCount, { scoreIndex:-1, pillIndexes:[], row:entry, nameIndex:2 })}</tr>`;
 }
@@ -2095,6 +2238,40 @@ function moveRowsBetweenContexts(items, fromKey, toKey, { restoreOrder=false }={
   renderTableContext(toKey);
 }
 
+function copyRowsFromGraphToMerge(items){
+  const graphCtx=getTableContext('graph');
+  const mergeCtx=getTableContext('merge');
+  if(!graphCtx || !mergeCtx || !Array.isArray(items) || !items.length) return;
+  const normalized=items.map(item=>{
+    if(item && typeof item==='object' && item.code){
+      const code=String(item.code||'').trim();
+      return code? { code, meta:item.meta } : null;
+    }
+    return null;
+  }).filter(Boolean);
+  if(!normalized.length) return;
+  const seen=new Set();
+  const clones=[];
+  for(const info of normalized){
+    if(seen.has(info.code)) continue;
+    seen.add(info.code);
+    const entry=graphCtx.dataByCode?.get?.(info.code);
+    if(!entry) continue;
+    if(mergeCtx.dataByCode?.has?.(info.code)){
+      removeRowDataFromContext(mergeCtx, info.code);
+    }
+    const clone={
+      ...entry,
+      cells: Array.isArray(entry.cells) ? entry.cells.slice() : [],
+      meta: Object.assign({}, entry.meta || {}, info.meta || {})
+    };
+    clones.push(clone);
+  }
+  if(!clones.length) return;
+  clones.forEach(entry=> insertRowDataIntoContext(mergeCtx, entry));
+  renderTableContext('merge');
+}
+
 function removeRowDataFromContext(ctx, code){
   if(!ctx || !code || !ctx.dataByCode) return null;
   const entry=ctx.dataByCode.get(code);
@@ -2124,36 +2301,107 @@ function insertRowDataIntoContext(ctx, entry, { restoreOrder=false }={}){
   if(entry.code){ ctx.dataByCode.set(entry.code, entry); }
 }
 
-function syncTableRowsAfterUltimate({ entries, cid }={}){
+function syncTableRowsAfterUltimate({ entries, cid, copyOnly=false }={}){
   if(!Array.isArray(entries) || !entries.length) return;
-  const items=[];
-  entries.forEach(entry=>{
-    const code = getEntryCode(entry);
-    if(!code) return;
-    const mergerCode = normalizeCode(entry?.mergedBy) || code;
-    items.push({ code, meta:{ mergerCode, cid } });
-    entry.__movedToMerge=true;
-  });
-  if(items.length){ moveRowsBetweenContexts(items, 'graph','merge'); }
+  rebuildMergeTableFromRecords();
 }
 
 function restoreTableRowsAfterUltimate({ entries }={}){
-  if(!Array.isArray(entries) || !entries.length) return;
-  const items=[];
-  entries.forEach(entry=>{
-    if(entry?.__movedToMerge){
-      const code=getEntryCode(entry);
-      if(code) items.push(code);
-      entry.__movedToMerge=false;
-    }
-  });
-  if(items.length){ moveRowsBetweenContexts(items,'merge','graph',{ restoreOrder:true }); }
+  rebuildMergeTableFromRecords();
 }
 
 function getEntryCode(entry){
   const nodeId = entry?.node?.id || '';
   return nodeId ? normalizeCode(nodeId) : '';
 }
+
+function rebuildMergeTableFromRecords(){
+  const mergeCtx=getTableContext('merge');
+  const graphCtx=getTableContext('graph');
+  if(!mergeCtx) return;
+  mergeCtx.rows=[]; mergeCtx.dataByCode=new Map();
+  const records = (typeof mergePruneRecords!=='undefined' && mergePruneRecords instanceof Map)
+    ? mergePruneRecords
+    : ((typeof globalThis!=='undefined' && globalThis.mergePruneRecords instanceof Map) ? globalThis.mergePruneRecords : null);
+  if(!records || !records.size){
+    renderTableContext('merge');
+    return;
+  }
+  let seq=1;
+  for(const [cidKey, entries] of records.entries()){
+    if(!Array.isArray(entries)) continue;
+    entries.forEach(entry=>{
+      const code = normalizeCode(getEntryCode(entry));
+      if(!code) return;
+      if(mergeCtx.dataByCode.has(code)) return;
+      const ref = graphCtx?.dataByCode?.get(code);
+      const name = ref?.meta?.displayName || ref?.cells?.[2] || '';
+      const primary = ref?.primaryCellCode || '';
+      const row={
+        code,
+        rawCode:code,
+        cells:[String(seq), code, name, '', primary],
+        originalIndex: seq-1,
+        meta:{ mergerCode: normalizeCode(entry?.mergedBy)||code, cid:String(cidKey), displayName:name }
+      };
+      mergeCtx.rows.push(row);
+      mergeCtx.dataByCode.set(code, row);
+      seq++;
+    });
+  }
+  renderTableContext('merge');
+}
+
+function exportMergeExcel(){
+  try{
+    const mergeCtx=getTableContext('merge');
+    if(!mergeCtx || !mergeCtx.rows || !mergeCtx.rows.length){
+      alert('暂无吞并数据可导出');
+      return;
+    }
+    const table=document.getElementById('mergeDataTable');
+    if(!table){
+      alert('未找到吞并表格');
+      return;
+    }
+    const rows=[];
+    const trs=table.querySelectorAll('tr');
+    trs.forEach(tr=>{
+      const tds=Array.from(tr.children).map(td=>{
+        const val=(td.textContent||'').trim();
+        return val;
+      });
+      rows.push(tds);
+    });
+    if(rows.length===0){
+      alert('表格内容为空，无法导出');
+      return;
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    // 高亮“剔品推荐”列
+    if(rows.length){
+      const header=rows[0]||[];
+      const highlightIdx=header.findIndex(text=> String(text||'').trim()==='剔品推荐');
+      if(highlightIdx>=0){
+        const fillStyle={ patternType:'solid', fgColor:{ rgb:'FFFDE68A' } };
+        rows.forEach((_,rIdx)=>{
+          const cellAddr=XLSX.utils.encode_cell({ r:rIdx, c:highlightIdx });
+          if(ws[cellAddr]){
+            ws[cellAddr].s = ws[cellAddr].s || {};
+            ws[cellAddr].s.fill = fillStyle;
+          }
+        });
+      }
+    }
+    XLSX.utils.book_append_sheet(wb, ws, '吞并视图');
+    XLSX.writeFile(wb, 'merge-view.xlsx');
+  }catch(err){
+    console.error('导出 Excel 失败', err);
+    alert('导出 Excel 失败，请重试');
+  }
+}
+if(typeof window!=='undefined'){ window.exportMergeExcel = exportMergeExcel; }
 
 function hydrateMergeTableFromPruneRecords(){
   const records = getGlobalPruneRecords();
@@ -2225,7 +2473,16 @@ function highlightRawTableRow(code,{scroll=true, view='graph'}={}){
   const ctx=getTableContext(view);
   if(!ctx || !ctx.renderedRowMap) return false;
   const normalized=normalizeCode(code);
-  const row = (ctx.primaryRowMap && normalized) ? (ctx.primaryRowMap.get(normalized) || ctx.renderedRowMap.get(normalized)) : ctx.renderedRowMap.get(normalized || String(code));
+  let row=null;
+  if(view==='merge'){
+    // 优先匹配表格里的 data-code 与 cells[1]
+    row = ctx.renderedRowMap.get(normalized) || ctx.renderedRowMap.get(normalizeCode(String(code)));
+    if(!row && ctx.primaryRowMap){
+      row = ctx.primaryRowMap.get(normalized);
+    }
+  }else{
+    row = (ctx.primaryRowMap && normalized) ? (ctx.primaryRowMap.get(normalized) || ctx.renderedRowMap.get(normalized)) : ctx.renderedRowMap.get(normalized || String(code));
+  }
   if(!row) return false;
   if(ctx.activeRow && ctx.activeRow!==row){
     ctx.activeRow.classList.remove('is-highlighted');
@@ -2276,16 +2533,20 @@ function buildRowDataAttributes(entry){
   }
   return parts.length? ' '+parts.join(' ') : '';
 }
-function renderTableCells(cells, columnCount, { scoreIndex=-1, pillIndexes=[], row=null, rowScore='', nameIndex=1 }={}){
+function renderTableCells(cells, columnCount, { scoreIndex=-1, pillIndexes=[], relationIndex=-1, row=null, rowScore='', nameIndex=1 }={}){
   const out=[];
   for(let i=0;i<columnCount;i++){
     const value = Array.isArray(cells) ? cells[i] : '';
     const classNames=[];
     if(i===scoreIndex) classNames.push('col-score');
+    if(i===relationIndex) classNames.push('col-relation');
     const isPillColumn = Array.isArray(pillIndexes) ? pillIndexes.includes(i) : (typeof pillIndexes==='number' ? i===pillIndexes : false);
     if(isPillColumn) classNames.push('col-pill');
     const classAttr = classNames.length? ` class="${classNames.join(' ')}"` : '';
     let content = isPillColumn ? renderPillCell(value, { row, rowScore }) : escapeRawCell(value);
+    if(i===scoreIndex){
+      content = renderScorePill(rowScore || value);
+    }
     if(i===nameIndex){
       content = `<span class="cell-inner cell-inner--name">${content}</span>`;
     }
@@ -2294,7 +2555,52 @@ function renderTableCells(cells, columnCount, { scoreIndex=-1, pillIndexes=[], r
   return out.join('');
 }
 
-function buildGraphColumnRules(columnCount, { scoreIndex=-1, pillIndexes=[] }={}){
+function collectRelationCodesFromRow(row){
+  const codes=new Set();
+  if(!row || !Array.isArray(row.cells)) return [];
+  if(Array.isArray(rawTableRelationIndexes) && rawTableRelationIndexes.length){
+    rawTableRelationIndexes.forEach(idx=>{
+      if(!Number.isInteger(idx) || idx<0 || idx>=row.cells.length) return;
+      const tokens=extractCodesFromMixedValue(row.cells[idx]);
+      tokens.forEach(code=> codes.add(code));
+    });
+  }
+  return Array.from(codes);
+}
+
+function renderRowUltimateCell(row, { allowUltimate=false, preferredCode }={}){
+  const code = normalizeCode(preferredCode || row?.primaryCellCode || row?.code || '');
+  const disabled = !allowUltimate || !code;
+  if(!disabled && code){
+    const btn = `<button type="button" class="row-ultimate-btn" data-code="${escapeAttr(code)}" aria-label="对 ${escapeAttr(code)} 所属同品组进行究极剔品">
+      <span class="row-ultimate-icon" aria-hidden="true">
+        <svg viewBox="0 0 64 64" role="presentation" focusable="false">
+          <circle cx="32" cy="18" r="8" fill="none" stroke="#3C3C3C" stroke-width="3.5"/>
+          <circle cx="22" cy="38" r="8" fill="none" stroke="#3C3C3C" stroke-width="3.5"/>
+          <circle cx="42" cy="38" r="8" fill="none" stroke="#3C3C3C" stroke-width="3.5"/>
+          <path d="M32 18 L22 38 M32 18 L42 38 M22 38 L42 38" stroke="#3C3C3C" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+      </span>
+    </button>`;
+    return `<td class="col-action">${btn}</td>`;
+  }
+  const primary=normalizeCode(row?.primaryCellCode || row?.meta?.closestPrimaryCode || '');
+  const rels=collectRelationCodesFromRow(row);
+  if(!primary || !rels.length){
+    return `<td class="col-action"></td>`;
+  }
+  const btn=`<button type="button" class="row-remove-rel-btn" data-primary="${escapeAttr(primary)}" data-rel="${escapeAttr(rels.join(','))}" aria-label="删除与 ${escapeAttr(primary)} 的关系">
+    <span class="row-remove-rel-icon" aria-hidden="true">
+      <svg viewBox="0 0 64 64" role="presentation" focusable="false">
+        <line x1="14" y1="32" x2="50" y2="32" stroke="#3C3C3C" stroke-width="4" stroke-linecap="round"/>
+        <path d="M26 26l12 12M38 26l-12 12" stroke="#d14343" stroke-width="4" stroke-linecap="round"/>
+      </svg>
+    </span>
+  </button>`;
+  return `<td class="col-action">${btn}</td>`;
+}
+
+function buildGraphColumnRules(columnCount, { scoreIndex=-1, pillIndexes=[], columnOrder=[], relationIndex=-1 }={}){
   if(columnCount<=0) return '';
   const cols=[];
   for(let i=0;i<columnCount;i++){
@@ -2308,6 +2614,10 @@ function buildGraphColumnRules(columnCount, { scoreIndex=-1, pillIndexes=[] }={}
     if(i===scoreIndex && scoreIndex>=0){
       styleParts.push('width:110px');
       classNames.push('col-score-col');
+    }
+    if(i===relationIndex && relationIndex>=0){
+      styleParts.push('width:160px');
+      classNames.push('col-relation-col');
     }
     const styleAttr = styleParts.length ? ` style="${styleParts.join(';')}"` : '';
     const classAttr = classNames.length ? ` class="${classNames.join(' ')}"` : '';
@@ -2333,6 +2643,14 @@ function renderPillCell(value, { row=null, rowScore='' }={}){
     }
   });
   return `<span class="cell-pill-group">${parts.join('')}</span>`;
+}
+
+function renderScorePill(value){
+  const text=String(value ?? '').trim();
+  if(!text){
+    return '<span class="cell-pill is-empty">—</span>';
+  }
+  return `<span class="cell-pill cell-pill--score">${escapeInlineText(text)}</span>`;
 }
 
 function parseScoreNumber(value){
@@ -2384,6 +2702,14 @@ function extractScoreFromReasonCell(cell){
   if(extracted!=='') return extracted;
   const match=text.match(/score\s*[:=]\s*([-+]?\d*\.?\d+)/i);
   if(match && match[1]) return match[1];
+  const matchCn=text.match(/(?:分数|得分|相似度|相似度分)\s*[：:=]\s*([-+]?\d*\.?\d+)/i);
+  if(matchCn && matchCn[1]) return matchCn[1];
+  const matchSuffix=text.match(/([-+]?\d*\.?\d+)\s*分\b/);
+  if(matchSuffix && matchSuffix[1]) return matchSuffix[1];
+  const loose=text.match(/([-+]?\d*\.?\d+)/g);
+  if(loose && loose.length){
+    return loose[loose.length-1];
+  }
   return '';
 }
 
@@ -2460,10 +2786,15 @@ function setupPrimaryRowToggles(ctx){
   if(!map) return;
   const rows=table.querySelectorAll('tbody tr.raw-table-row[data-row-kind="primary"]');
   rows.forEach(row=>{
-    const primaryRaw=row.getAttribute('data-primary-code') || row.getAttribute('data-closest-primary') || row.getAttribute('data-code');
+    const codeRaw=row.getAttribute('data-code') || '';
+    const primaryRaw=row.getAttribute('data-primary-code') || row.getAttribute('data-closest-primary') || codeRaw;
     const normalized=normalizeCode(primaryRaw);
-    if(!normalized) return;
+    const normalizedCode=normalizeCode(codeRaw);
+    if(!normalized || !normalizedCode) return; // 无商品编码时不显示加减号
     row.setAttribute('data-primary-normalized', normalized);
+    if(!row.getAttribute('data-closest-primary')){
+      row.setAttribute('data-closest-primary', normalized);
+    }
     const firstCell=row.querySelector('td');
     if(!firstCell) return;
     firstCell.classList.add('cell--has-primary-toggle');
@@ -2511,6 +2842,7 @@ function applyPrimaryCollapseState(ctx){
   rows.forEach(row=>{
     const primary=normalizeCode(row.getAttribute('data-primary-code')||'');
     const closest=normalizeCode(row.getAttribute('data-closest-primary')||'');
+    const code=normalizeCode(row.getAttribute('data-code')||'');
     if(primary){
       const collapsed=!!map.get(primary);
       row.classList.toggle('is-primary-collapsed', collapsed);
@@ -2519,6 +2851,8 @@ function applyPrimaryCollapseState(ctx){
       if(btn){ btn.setAttribute('aria-expanded', collapsed? 'false':'true'); }
     }else if(closest){
       row.classList.toggle('is-hidden-by-primary', !!map.get(closest));
+    }else if(code){
+      row.classList.toggle('is-hidden-by-primary', !!map.get(code));
     }else{
       row.classList.remove('is-hidden-by-primary');
     }

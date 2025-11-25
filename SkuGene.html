@@ -44,6 +44,35 @@
           </div>
         </div>
       </div>
+      <div class="ai-confirm" id="aiConfirm" hidden aria-hidden="true">
+        <div class="ai-confirm__dialog" role="alertdialog" aria-modal="true" aria-labelledby="aiConfirmTitle">
+          <div class="ai-confirm__header">
+            <div class="ai-confirm__badge">AI</div>
+            <div>
+              <h4 id="aiConfirmTitle">启动 工品查AI 一键聚品</h4>
+              <p class="ai-confirm__subtitle">将调用工品查同品聚品自动化主薄智能体，耗时取决于您上传的数据量</p>
+            </div>
+          </div>
+          <p class="ai-confirm__desc" id="aiConfirmDesc">确认后将继续处理当前吞并视图中的数据，期间请勿关闭页面或中断，处理完成前无法终止。</p>
+          <div class="ai-confirm__actions">
+            <button type="button" class="ai-confirm__primary" id="aiConfirmAccept">立即执行</button>
+            <button type="button" class="ai-confirm__ghost" id="aiConfirmCancel">取消</button>
+          </div>
+        </div>
+      </div>
+      <div class="ai-progress" id="aiProgress" hidden aria-hidden="true">
+        <div class="ai-progress__dialog" role="alertdialog" aria-modal="true" aria-labelledby="aiProgressTitle">
+          <h4 id="aiProgressTitle">工品查同品聚品主薄任务进行中</h4>
+          <p class="ai-progress__desc" id="aiProgressDesc">正在处理，请稍候…</p>
+          <div class="ai-progress__bar" aria-hidden="false">
+            <div class="ai-progress__bar-fill" id="aiProgressBar" style="width:0%"></div>
+            <span class="ai-progress__bar-text" id="aiProgressValue">0%</span>
+          </div>
+          <div class="ai-progress__actions">
+            <button type="button" class="ai-progress__goto" id="aiProgressGoto" data-target-url="" hidden>去工品查同源智合剔品页面</button>
+          </div>
+        </div>
+      </div>
       <aside class="control-panel" id="controlPanel" aria-label="操作栏">
         <div class="card card--control panel-card" id="graphControlPanel">
           <section class="control-section control-section--load">
@@ -214,7 +243,7 @@
               <div class="cell cell--actions">
                 <div class="button-group button-group--wide">
                   <button id="mergeResetBtn">视图复位</button>
-                  <button id="mergeExportPng">导出 PNG</button>
+                  <button id="mergeExportExcel">导出 Excel</button>
                 </div>
               </div>
             </div>
@@ -276,17 +305,24 @@
                     <button type="button" class="view-tab is-active" id="viewTabGraph" data-view-target="graph" aria-pressed="true" role="tab" aria-controls="graphViewPane">图谱视图</button>
                     <button type="button" class="view-tab" id="viewTabMerge" data-view-target="merge" aria-pressed="false" role="tab" aria-controls="mergeViewPane">吞并视图</button>
                   </div>
-                  <div class="view-stats view-stats--graph" id="graphStatsBar" aria-hidden="false">
-                    <div class="view-stat"><span>节点：</span><span class="view-stat__value" id="graphStatNodes">0</span></div>
-                    <div class="view-stat"><span>关系：</span><span class="view-stat__value" id="graphStatEdges">0</span></div>
-                    <div class="view-stat"><span>组件：</span><span class="view-stat__value" id="graphStatComponents">0</span></div>
-                    <div class="view-stat"><span>最大组件：</span><span class="view-stat__value" id="graphStatMaxGroup">0</span></div>
-                  </div>
-                  <div class="view-stats view-stats--merge" id="mergeStatsBar" aria-hidden="true">
-                    <div class="view-stat"><span>组件：</span><span class="view-stat__value" id="mergeStatComponents">0</span></div>
-                    <div class="view-stat"><span>吞并节点：</span><span class="view-stat__value" id="mergeStatVictims">0</span></div>
-                    <div class="view-stat"><span>关系：</span><span class="view-stat__value" id="mergeStatEdges">0</span></div>
-                    <div class="view-stat"><span>展示：</span><span class="view-stat__value" id="mergeStatNodes">0</span></div>
+                    <div class="view-meta">
+                      <div class="autosave-indicator" id="autosaveIndicator" role="status" aria-live="polite" data-state="saved">
+                        <span class="autosave-indicator__dot" aria-hidden="true"></span>
+                        <span class="autosave-indicator__text" id="autosaveIndicatorText">已保存</span>
+                      </div>
+                      <button type="button" class="primary primary--danger publish-inline" id="publishBtnHeader">发布</button>
+                      <div class="view-stats view-stats--graph" id="graphStatsBar" aria-hidden="false">
+                        <div class="view-stat"><span>节点：</span><span class="view-stat__value" id="graphStatNodes">0</span></div>
+                        <div class="view-stat"><span>关系：</span><span class="view-stat__value" id="graphStatEdges">0</span></div>
+                        <div class="view-stat"><span>组件：</span><span class="view-stat__value" id="graphStatComponents">0</span></div>
+                        <div class="view-stat"><span>最大组件：</span><span class="view-stat__value" id="graphStatMaxGroup">0</span></div>
+                    </div>
+                    <div class="view-stats view-stats--merge" id="mergeStatsBar" aria-hidden="true">
+                      <div class="view-stat"><span>组件：</span><span class="view-stat__value" id="mergeStatComponents">0</span></div>
+                      <div class="view-stat"><span>吞并节点：</span><span class="view-stat__value" id="mergeStatVictims">0</span></div>
+                      <div class="view-stat"><span>关系：</span><span class="view-stat__value" id="mergeStatEdges">0</span></div>
+                      <div class="view-stat"><span>展示：</span><span class="view-stat__value" id="mergeStatNodes">0</span></div>
+                    </div>
                   </div>
                 </div>
                 <p class="card-subtitle">查看节点关系，关注关键指标与处理进度</p>
